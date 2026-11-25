@@ -1,0 +1,24 @@
+name: detour_vpn
+description: A self-hosted, split-tunnel VPN plugin (per-app routing, low battery use, built-in ad blocking) that talks to a detour-server instance.
+version: 0.1.0
+homepage: https://github.com/
+
+environment:
+  sdk: ^3.9.2
+  flutter: ">=3.3.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  equatable: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.detour.vpn
+        pluginClass: DetourVpnPlugin

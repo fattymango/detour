@@ -1,0 +1,21 @@
+# Go
+server/detour-server-*
+
+# Flutter / Dart
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+**/build/
+**/.metadata
+app/android/local.properties
+app/android/.gradle/
+app/android/**/gradlew.log
+*.iml
+.idea/
+
+# Server secrets - never commit these
+*.key
+*.jks
+key.properties
+users.db

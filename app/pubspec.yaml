@@ -1,0 +1,21 @@
+name: detour
+description: Minimal demo app for the detour_vpn plugin — connect to a self-hosted detour-server.
+version: 0.1.0
+publish_to: "none"
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  detour_vpn:
+    path: ../packages/detour_vpn
+  installed_apps: ^2.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
