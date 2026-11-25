@@ -96,6 +96,8 @@ class VpnChannel {
     return (result ?? const []).cast<Map<dynamic, dynamic>>();
   }
 
+  Future<String?> getLastConfig() => _methodChannel.invokeMethod<String>('getLastConfig');
+
   Future<String> getIdleAction() async {
     return await _methodChannel.invokeMethod<String>('getIdleAction') ?? 'off';
   }

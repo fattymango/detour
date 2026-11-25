@@ -305,6 +305,8 @@ class DetourVpnPlugin :
                 )
             }
 
+            "getLastConfig" -> result.success(WidgetConfigStore(appContext).lastConfig())
+
             "getIdleAction" -> result.success(if (idleStop.hasUsageAccess()) idleStop.action else IdleStop.OFF)
 
             "setIdleAction" -> {

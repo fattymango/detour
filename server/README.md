@@ -23,9 +23,7 @@ You need a Linux server with a public IPv4 address, root access, `openssl` and `
 
 ### 1. Get the program
 
-Download `detour-server-linux-amd64` (or `-arm64` for ARM servers) from [Releases](https://github.com/fattymango/detour/releases), and copy it to `/tmp/detour-server` on the server.
-
-Or build it, on any computer with [Go](https://go.dev/dl/), in this folder:
+There are no prebuilt downloads yet, so build it on any computer with [Go](https://go.dev/dl/), in this folder. Use `GOARCH=arm64` for ARM servers:
 
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o detour-server .
@@ -129,9 +127,9 @@ FINGERPRINT=$(sudo openssl x509 -in /etc/detour/server.crt -noout -fingerprint -
 echo "detour://admin:$PASSWORD@$SERVER_IP:443/$FINGERPRINT?name=myserver"
 ```
 
-Copy the `detour://` line to your phone privately (whoever adds it first becomes admin). In the app, tap **+**, then **Paste**, then **Add**. Choose your apps under **⋮ → Select apps** before connecting: with none selected, every app uses the VPN.
+Copy the `detour://` line to your phone privately (whoever adds it first becomes admin). In the app, tap **Paste invite link**, then **Add**. Choose your apps under **Apps using the VPN** before connecting: with none selected, every app uses the VPN.
 
-From then on, invite everyone else from the app under **⋮ → Manage users**.
+From then on, invite everyone else from the app, under **Servers**, with the people icon.
 
 ## Managing users
 
@@ -144,7 +142,7 @@ detour-server listusers
 
 All of them, and `serve`, use `/var/lib/detour/users.db`. To use another file, put `--db` right after the command name, before the username.
 
-Every server is independent: it has its own users and its own admins. Make the first admin with `setadmin` on the server. Admins can then add, reset and remove that server's users from the app (**⋮ → Manage users**), but only the CLI can make or unmake admins.
+Every server is independent: it has its own users and its own admins. Make the first admin with `setadmin` on the server. Admins can then add, reset and remove that server's users from the app (under **Servers**, with the people icon), but only the CLI can make or unmake admins.
 
 Every new user, and every reset one, starts as an unclaimed invite. Adding its link in the app claims it: the app replaces the password with a random one that only that phone knows, so the link works once. A user who changes phones needs a new link.
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'home_screen.dart';
+import 'theme.dart';
 
 void main() => runApp(const DetourApp());
 
@@ -11,7 +12,8 @@ class DetourApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Detour',
-      theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
+      theme: detourTheme(Brightness.light),
+      darkTheme: detourTheme(Brightness.dark),
       home: const HomeScreen(),
     );
   }

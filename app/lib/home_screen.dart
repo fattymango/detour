@@ -1,14 +1,18 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:detour_vpn/detour_vpn.dart';
 import 'package:flutter/material.dart';
+import 'package:installed_apps/installed_apps.dart';
 
 import 'app_selector_screen.dart';
 import 'idle_minutes_dialog.dart';
+import 'idle_screen.dart';
 import 'import_dialog.dart';
-import 'logs_screen.dart';
-import 'users_screen.dart';
+import 'power_button.dart';
+import 'servers_screen.dart';
+import 'settings_screen.dart';
+import 'theme.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,31 +23,43 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _vpn = VpnRepository();
-  List<TunnelConfig> _configs = [];
+  List<TunnelConfig>? _configs;
+  String? _selectedName;
   TunnelStatus _status = const TunnelStatus.initial();
   StreamSubscription<TunnelStatus>? _statusSub;
-
-  // Answered servers only, so each is asked once and unreachable ones are retried.
-  final _isAdmin = <String, bool>{};
-
-  final _latency = <String, String>{};
+  IdleAction _idleAction = IdleAction.off;
+  int _idleMinutes = 5;
   bool _askBattery = false;
   bool _batteryDismissed = false;
-  IdleAction _idleAction = IdleAction.off;
+  final _appNames = <String, String>{};
 
-  // Chosen, but waiting for the user to grant usage access.
-  IdleAction? _pendingIdleAction;
-  int _idleMinutes = 5;
+  bool get _busy => _status.state == TunnelState.connecting || _status.state == TunnelState.reconnecting;
+  bool get _running => _busy || _status.state == TunnelState.connected || _status.state == TunnelState.standby;
+
+  TunnelConfig? get _selected {
+    final configs = _configs ?? const [];
+    final name = _running ? _status.activeConfigName : _selectedName;
+    return configs.where((c) => c.name == name).firstOrNull ?? configs.firstOrNull;
+  }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _statusSub = _vpn.watchStatus().listen(_onStatus);
+    _vpn.currentStatus().then((s) {
+      if (mounted) _onStatus(s);
+    });
     _checkBattery();
-    _loadIdleSettings();
-    _statusSub = _vpn.watchStatus().listen((s) => setState(() => _status = s));
-    _vpn.currentStatus().then((s) => setState(() => _status = s));
-    _loadConfigs();
+    _loadIdle();
+    _start();
+  }
+
+  Future<void> _start() async {
+    final last = await _vpn.lastConfigName();
+    if (!mounted) return;
+    _selectedName = last;
+    await _loadConfigs();
   }
 
   @override
@@ -57,15 +73,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
     _checkBattery();
-    _loadIdleSettings();
+    _loadIdle();
   }
 
-  Future<void> _loadIdleSettings() async {
-    final pending = _pendingIdleAction;
-    if (pending != null && await _vpn.hasUsageAccess()) {
-      _pendingIdleAction = null;
-      await _vpn.setIdleAction(pending);
+  void _onStatus(TunnelStatus status) => setState(() {
+        _status = status;
+        if (_running && status.activeConfigName != null) _selectedName = status.activeConfigName;
+      });
+
+  Future<void> _loadConfigs() async {
+    final configs = await _vpn.listConfigs();
+    if (!mounted) return;
+    setState(() => _configs = configs);
+    for (final package in configs.expand((c) => c.includedApplications.take(1))) {
+      if (!_appNames.containsKey(package)) _loadAppName(package);
     }
+  }
+
+  Future<void> _loadAppName(String package) async {
+    final app = await InstalledApps.getAppInfo(package, withIcon: false);
+    if (mounted && app != null) setState(() => _appNames[package] = app.name);
+  }
+
+  Future<void> _loadIdle() async {
     final action = await _vpn.getIdleAction();
     final minutes = await _vpn.getIdleMinutes();
     if (!mounted) return;
@@ -75,110 +105,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _editIdleMinutes() async {
-    final minutes = await showDialog<int>(
-      context: context,
-      builder: (_) => IdleMinutesDialog(minutes: _idleMinutes),
-    );
-    if (minutes == null) return;
-    await _vpn.setIdleMinutes(minutes);
-    await _loadIdleSettings();
-  }
-
-  Future<void> _setIdleAction(IdleAction action) async {
-    if (action != IdleAction.off && !await _vpn.hasUsageAccess()) {
-      if (!mounted) return;
-      final open = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          scrollable: true,
-          title: const Text('Allow usage access'),
-          content: const Text(
-            'Detour needs usage access to see whether one of your VPN apps is on screen. '
-            'It stays on this phone. On the next screen, find Detour and turn it on.',
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Open settings')),
-          ],
-        ),
-      );
-      if (open != true) return;
-      _pendingIdleAction = action;
-      await _vpn.requestUsageAccess();
-      return;
-    }
-    _pendingIdleAction = null;
-    await _vpn.setIdleAction(action);
-    await _loadIdleSettings();
-  }
-
   Future<void> _checkBattery() async {
     final exempt = await _vpn.hasBatteryExemption();
     if (mounted) setState(() => _askBattery = !exempt);
-  }
-
-  Future<void> _checkLatency(TunnelConfig config) async {
-    setState(() => _latency[config.name] = 'checking…');
-    String result;
-    final watch = Stopwatch()..start();
-    try {
-      final socket = await Socket.connect(
-        config.endpointHost!,
-        config.endpointPort!,
-        timeout: const Duration(seconds: 5),
-      );
-      result = '${watch.elapsedMilliseconds} ms';
-      socket.destroy();
-    } on Exception {
-      result = 'unreachable';
-    }
-    if (mounted) setState(() => _latency[config.name] = result);
-  }
-
-  Future<void> _rename(TunnelConfig config) async {
-    final controller = TextEditingController(text: config.name);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        scrollable: true,
-        title: const Text('Rename server'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLength: 40,
-          decoration: const InputDecoration(labelText: 'Name'),
-          onSubmitted: (v) => Navigator.pop(context, v.trim()),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Rename')),
-        ],
-      ),
-    );
-    if (name == null || name == config.name) return;
-    try {
-      await _vpn.renameConfig(config.name, name);
-      _isAdmin.remove(config.name);
-      _latency.remove(config.name);
-    } on VpnRepositoryException catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
-    }
-    await _loadConfigs();
-  }
-
-  Future<void> _loadConfigs() async {
-    final configs = await _vpn.listConfigs();
-    if (!mounted) return;
-    setState(() => _configs = configs);
-    for (final config in configs) {
-      if (!_isAdmin.containsKey(config.name)) _checkAdmin(config.name);
-    }
-  }
-
-  Future<void> _checkAdmin(String name) async {
-    final admin = await _vpn.isServerAdmin(name);
-    if (mounted && admin != null) setState(() => _isAdmin[name] = admin);
   }
 
   Future<void> _connect(String name) async {
@@ -187,75 +116,221 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (!granted) return;
     }
     await _vpn.requestNotificationPermission();
-    await _vpn.connect(name);
+    try {
+      await _vpn.connect(name);
+    } on VpnRepositoryException catch (e) {
+      if (mounted) showMessage(context, e.message);
+    }
   }
 
-  Future<void> _importConfigDialog() async {
-    final imported = await showDialog<bool>(
-      context: context,
-      builder: (_) => ImportDialog(vpn: _vpn, existingNames: _configs.map((c) => c.name).toSet()),
+  Future<void> _push(Widget screen) =>
+      Navigator.push<void>(context, MaterialPageRoute(builder: (_) => screen));
+
+  Future<void> _openServers() async {
+    final picked = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ServersScreen(
+          vpn: _vpn,
+          selected: _selected?.name,
+          inUse: _running ? _status.activeConfigName : null,
+        ),
+      ),
     );
-    if (imported == true) await _loadConfigs();
+    await _loadConfigs();
+    if (picked == null || !mounted) return;
+    final switching = _running && picked != _status.activeConfigName;
+    setState(() => _selectedName = picked);
+    if (switching) await _connect(picked);
+  }
+
+  Future<void> _openApps(TunnelConfig config) async {
+    await _push(AppSelectorScreen(vpn: _vpn, config: config));
+    await _loadConfigs();
+  }
+
+  Future<void> _openIdle() async {
+    await _push(IdleScreen(vpn: _vpn));
+    await _loadIdle();
+  }
+
+  Future<void> _addFirstServer() async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => ImportDialog(vpn: _vpn, existingNames: const {}, pasteFirst: true),
+    );
+    if (name == null || !mounted) return;
+    setState(() => _selectedName = name);
+    await _loadConfigs();
+  }
+
+  String _apps(TunnelConfig config) {
+    final apps = config.includedApplications;
+    if (apps.isEmpty) return 'All apps';
+    final first = _appNames[apps.first] ?? apps.first;
+    return apps.length == 1 ? first : '$first and ${apps.length - 1} more';
+  }
+
+  String get _idleText => switch (_idleAction) {
+        IdleAction.off => 'Stay connected',
+        IdleAction.stop => 'Turn off after ${formatMinutes(_idleMinutes)}',
+        IdleAction.standby => 'Standby after ${formatMinutes(_idleMinutes)}',
+      };
+
+  ({StatusColors colors, String title, String detail, String action}) _look(TunnelConfig config) {
+    final apps = _apps(config);
+    return switch (_status.state) {
+      TunnelState.connected => (
+          colors: StatusColors.connected(context),
+          title: 'Connected',
+          detail: config.includedApplications.isEmpty ? 'All apps use the VPN' : 'Protecting $apps',
+          action: 'Disconnect',
+        ),
+      TunnelState.connecting => (
+          colors: StatusColors.busy(context),
+          title: 'Connecting…',
+          detail: 'Reaching ${config.name}',
+          action: 'Cancel',
+        ),
+      TunnelState.reconnecting => (
+          colors: StatusColors.busy(context),
+          title: 'Reconnecting…',
+          detail: 'Your selected apps wait until it is back',
+          action: 'Cancel',
+        ),
+      TunnelState.standby => (
+          colors: StatusColors.standby(context),
+          title: 'On standby',
+          detail: 'Connects when you open a selected app',
+          action: 'Turn off',
+        ),
+      TunnelState.error => (
+          colors: StatusColors.error(context),
+          title: "Couldn't connect",
+          detail: _status.errorMessage ?? 'Something went wrong',
+          action: 'Try again',
+        ),
+      TunnelState.disconnected || TunnelState.disconnecting => (
+          colors: StatusColors.off(context),
+          title: 'Not connected',
+          detail: 'Tap to connect',
+          action: 'Connect',
+        ),
+    };
   }
 
   @override
   Widget build(BuildContext context) {
-    final connected = _status.state == TunnelState.connected;
-    final standby = _status.state == TunnelState.standby;
-    final busy = _status.state == TunnelState.connecting || _status.state == TunnelState.reconnecting;
+    final configs = _configs;
+    final config = _selected;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Detour'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.article_outlined),
-            tooltip: 'Logs',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => LogsScreen(vpn: _vpn)),
-            ),
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Settings',
+            onPressed: () async {
+              await _push(SettingsScreen(vpn: _vpn));
+              await _checkBattery();
+            },
           ),
+          const SizedBox(width: 4),
         ],
       ),
-      body: Column(
-        children: [
-          ListTile(
-            title: Text(_statusLabel(_status)),
-            subtitle: _status.activeConfigName != null ? Text(_status.activeConfigName!) : null,
-            trailing: connected || busy || standby
-                ? FilledButton.tonal(onPressed: _vpn.disconnect, child: Text(busy ? 'Cancel' : 'Disconnect'))
-                : null,
-          ),
-          ListTile(
-            title: const Text('When not in use'),
-            subtitle: Text(switch (_idleAction) {
-              IdleAction.off => 'Stays connected.',
-              IdleAction.stop => 'Selected apps then use your normal connection.',
-              IdleAction.standby =>
-                'Selected apps have no internet in the background, and opening one connects again.',
-            }),
-            trailing: DropdownButton<IdleAction>(
-              value: _idleAction,
-              onChanged: (action) => _setIdleAction(action!),
-              items: const [
-                DropdownMenuItem(value: IdleAction.off, child: Text('Stay on')),
-                DropdownMenuItem(value: IdleAction.stop, child: Text('Turn off')),
-                DropdownMenuItem(value: IdleAction.standby, child: Text('Standby')),
+      body: SafeArea(
+        child: configs == null
+            ? const Center(child: CircularProgressIndicator())
+            : config == null
+                ? EmptyState(
+                    icon: Icons.vpn_key_outlined,
+                    title: 'Add your first server',
+                    body: 'Copy the invite link you were sent, then paste it here.',
+                    action: FilledButton.icon(
+                      onPressed: _addFirstServer,
+                      icon: const Icon(Icons.content_paste),
+                      label: const Text('Paste invite link'),
+                    ),
+                  )
+                : _dashboard(config),
+      ),
+    );
+  }
+
+  Widget _dashboard(TunnelConfig config) {
+    final theme = Theme.of(context);
+    final look = _look(config);
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 40),
+              child: Column(
+                children: [
+                  if (_askBattery && !_batteryDismissed) _batteryCard(),
+                  SizedBox(height: math.max(16, constraints.maxHeight * 0.05)),
+                  PowerButton(
+                    colors: look.colors,
+                    label: look.action,
+                    busy: _busy,
+                    onTap: () => _running ? _vpn.disconnect() : _connect(config.name),
+                  ),
+                  const SizedBox(height: 24),
+                  Semantics(
+                    liveRegion: true,
+                    child: Column(
+                      children: [
+                        Text(look.title, textAlign: TextAlign.center, style: theme.textTheme.headlineSmall),
+                        const SizedBox(height: 4),
+                        Text(
+                          look.detail,
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              children: [
+                InfoCard(
+                  icon: Icons.dns_outlined,
+                  title: config.name,
+                  detail: '${config.endpointHost}',
+                  onTap: _openServers,
+                ),
+                const SizedBox(height: 8),
+                InfoCard(icon: Icons.apps, title: 'Apps using the VPN', detail: _apps(config), onTap: () => _openApps(config)),
+                const SizedBox(height: 8),
+                InfoCard(
+                  icon: Icons.bedtime_outlined,
+                  title: 'When not in use',
+                  detail: _idleText,
+                  onTap: _openIdle,
+                ),
               ],
             ),
-          ),
-          if (_idleAction != IdleAction.off)
-            ListTile(
-              title: const Text('After'),
-              trailing: Text(formatMinutes(_idleMinutes)),
-              onTap: _editIdleMinutes,
-            ),
-          const Divider(height: 1),
-          if (_askBattery && !_batteryDismissed)
-            MaterialBanner(
-              leading: const Icon(Icons.battery_alert),
-              content: const Text('Android may stop the VPN to save battery. Let Detour run in the background?'),
-              actions: [
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _batteryCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('Android may stop the VPN to save battery. Let Detour run in the background?'),
+            Wrap(
+              alignment: WrapAlignment.end,
+              children: [
                 TextButton(
                   onPressed: () => setState(() => _batteryDismissed = true),
                   child: const Text('Not now'),
@@ -263,82 +338,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 TextButton(onPressed: _vpn.requestBatteryExemption, child: const Text('Allow')),
               ],
             ),
-          Expanded(
-            child: _configs.isEmpty
-                ? const Center(child: Text('No saved configs yet. Tap + to import one.'))
-                : ListView.builder(
-                    itemCount: _configs.length,
-                    itemBuilder: (context, i) {
-                      final config = _configs[i];
-                      final inUse = _status.activeConfigName == config.name && (connected || busy || standby);
-                      final isActive = inUse && connected;
-                      return ListTile(
-                        leading: Icon(isActive ? Icons.lock : Icons.lock_outline),
-                        title: Text(config.name),
-                        subtitle: Text('${config.endpointHost}:${config.endpointPort} · '
-                            '${config.includedApplications.length} app(s)'
-                            '${_latency.containsKey(config.name) ? ' · ${_latency[config.name]}' : ''}'),
-                        onTap: isActive ? null : () => _connect(config.name),
-                        trailing: PopupMenuButton<String>(
-                          onSelected: (action) async {
-                            switch (action) {
-                              case 'apps':
-                                await Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => AppSelectorScreen(vpn: _vpn, config: config),
-                                  ),
-                                );
-                                _loadConfigs();
-                              case 'users':
-                                await Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => UsersScreen(vpn: _vpn, config: config),
-                                  ),
-                                );
-                              case 'latency':
-                                await _checkLatency(config);
-                              case 'rename':
-                                await _rename(config);
-                              case 'delete':
-                                await _vpn.deleteConfig(config.name);
-                                _isAdmin.remove(config.name);
-                                _loadConfigs();
-                            }
-                          },
-                          itemBuilder: (context) => [
-                            const PopupMenuItem(value: 'apps', child: Text('Select apps')),
-                            if (_isAdmin[config.name] ?? false)
-                              const PopupMenuItem(value: 'users', child: Text('Manage users')),
-                            const PopupMenuItem(value: 'latency', child: Text('Check latency')),
-                            // The running VPN finds its config by name.
-                            PopupMenuItem(value: 'rename', enabled: !inUse, child: const Text('Rename')),
-                            PopupMenuItem(value: 'delete', enabled: !inUse, child: const Text('Delete')),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _importConfigDialog,
-        child: const Icon(Icons.add),
+          ],
+        ),
       ),
     );
-  }
-
-  String _statusLabel(TunnelStatus status) {
-    return switch (status.state) {
-      TunnelState.connected => 'Connected',
-      TunnelState.connecting => 'Connecting…',
-      TunnelState.reconnecting => 'Reconnecting…',
-      TunnelState.standby => 'Standby, connects when you open a selected app',
-      TunnelState.disconnecting => 'Disconnecting…',
-      TunnelState.error => 'Error: ${status.errorMessage ?? 'unknown'}',
-      TunnelState.disconnected => 'Disconnected',
-    };
   }
 }

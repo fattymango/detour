@@ -21,11 +21,11 @@ void main() {
               ? {'name': 'aws', 'endpointHost': '1.2.3.4', 'endpointPort': 443, 'username': 'ali'}
               : null,
     );
-    final result = <bool?>[];
+    final result = <String?>[];
     await tester.pumpWidget(MaterialApp(
       home: Builder(
         builder: (context) => TextButton(
-          onPressed: () async => result.add(await showDialog<bool>(
+          onPressed: () async => result.add(await showDialog<String>(
             context: context,
             builder: (_) => ImportDialog(vpn: VpnRepository(), existingNames: const {'aws'}),
           )),
@@ -61,7 +61,7 @@ void main() {
     await tester.ensureVisible(find.text('Add'));
     await tester.tap(find.text('Add'));
     await tester.pumpAndSettle();
-    expect(result, [true]);
+    expect(result, ['aws 2']);
   });
 
   testWidgets('invite sheet fits a small screen and copies the link', (tester) async {

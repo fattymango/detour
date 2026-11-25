@@ -145,6 +145,9 @@ class VpnRepository {
     return raw.map(VpnLogEntry.fromMap).toList();
   }
 
+  /// The config that last connected. It may have been deleted since.
+  Future<String?> lastConfigName() => _channel.getLastConfig();
+
   /// What happens after [getIdleMinutes] without this app or any tunneled app
   /// on screen, or steady traffic. [IdleAction.off] without usage access.
   Future<IdleAction> getIdleAction() async => IdleAction.values.byName(await _channel.getIdleAction());

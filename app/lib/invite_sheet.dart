@@ -43,14 +43,20 @@ class _InviteSheetState extends State<InviteSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(Icons.vpn_key, size: 40, color: colors.primary),
+          Center(
+            child: CircleAvatar(
+              radius: 32,
+              backgroundColor: colors.primaryContainer,
+              child: Icon(Icons.vpn_key_outlined, size: 30, color: colors.onPrimaryContainer),
+            ),
+          ),
           const SizedBox(height: 12),
           Text('Invite for ${widget.username}', textAlign: TextAlign.center, style: theme.textTheme.titleLarge),
           Text('Server: ${widget.server}', textAlign: TextAlign.center, style: theme.textTheme.bodyMedium),
           const SizedBox(height: 20),
           Material(
             color: colors.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(12),
             clipBehavior: Clip.antiAlias,
             child: InkWell(
               onTap: _copy,

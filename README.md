@@ -1,38 +1,63 @@
-# Detour
+<h1 align="center">Detour</h1>
 
-A self-hosted, split-tunnel VPN: run `detour-server` on your own box, connect your phone to it, and pick exactly which apps route through it. Built because WireGuard gets blocked by some networks' DPI and OpenVPN has no clean embeddable Android library — Detour disguises its traffic as plain TLS on port 443.
+<p align="center"><b>Your own VPN, on your own server, for only the apps you choose.</b></p>
 
-- **Per-app tunneling** — only the apps you choose use the VPN; everything else bypasses it at the OS level.
-- **Light on battery** — sleeps until there is traffic, with a brief check every few minutes instead of constant heartbeats.
-- **Rests when not in use** — after a time you choose, it can turn off, or go on standby and reconnect when you open one of its apps.
-- **One-time invites** — a link works for the first phone that adds it, and logins are stored encrypted.
-- **Home-screen widget** — connect and disconnect with one tap.
-- **Per-user limits** — admins set each user's speed and total data in the app; the server enforces them.
-- **No central service, no accounts with a third party** — you run the server, you own the user list.
+<p align="center">
+  <a href="docs/free-server.md"><b>Free server</b></a> ·
+  <a href="server/README.md"><b>Server guide</b></a> ·
+  <a href="packages/detour_vpn/README.md"><b>Package</b></a>
+</p>
 
-## Layout
+<p align="center">
+  <img src="docs/screenshots/hero.png" alt="Choosing apps, connected, and on standby" width="640">
+</p>
 
-```
-server/              Go tunnel server (detour-server) — run this on your own machine
-packages/detour_vpn/ Flutter plugin: the VPN engine (Dart API + Android VpnService) — install it in any app
-app/                 Thin demo Flutter app built on detour_vpn
-```
+Self-hosted, Android, and looks like ordinary HTTPS on port 443.
 
-Everything is designed to be used independently: `detour-server` is a single Go binary with no Flutter dependency, and `detour_vpn` is a normal Flutter plugin you can add to your own app's `pubspec.yaml` without touching `app/` at all.
+## Customizable
+
+- Choose which apps use the VPN, and change them while connected
+- When idle: stay on, turn off, or standby, after 1 minute to 24 hours
+- Many servers, each with its own apps and people
+- Home-screen widget, light and dark themes
+- Use the engine in your own app: [`detour_vpn`](packages/detour_vpn)
+
+## Easy on the battery
+
+- Sleeps until there's traffic: no polling, no standing wake lock
+- One tiny ping about every 4 minutes while connected
+- **Standby** drops the connection completely, and reconnects when you open a selected app
+
+| Short idle tests | Connected | Standby |
+|---|---|---|
+| CPU time | 0.1 s in 4.5 min | 0.03 s in 1.5 min |
+| Scheduled wake-ups | About every 4 min | None |
+
+## Share it
+
+<p align="center"><img src="docs/screenshots/people.png" alt="People and their data use" width="240"></p>
+
+- Invite people with a link that works once
+- Speed and data limits per person, enforced by the server
+- Remove someone and they're disconnected right away
+
+## Secure
+
+- Pinned server certificate, and logins encrypted with the Android Keystore
+- Rate-limited logins, no traffic logs
+- Selected apps wait during reconnects and standby, instead of leaking
 
 ## Quick start
 
-1. **Server**: follow [`server/README.md`](server/README.md). It ends with an invite link for your admin account.
-2. **App** (Android 8 or newer): install the APK from [Releases](https://github.com/fattymango/detour/releases), usually `detour-android-arm64-v8a.apk`. Or build it with [Flutter](https://docs.flutter.dev/get-started/install): `cd app && flutter run`.
-3. In the app, tap **+**, paste the invite link, and tap **Add**. Pick your apps under **⋮ → Select apps**, then tap the server to connect.
-4. Invite other people under **⋮ → Manage users**.
+1. [Set up a server](server/README.md), or [get one free](docs/free-server.md). It ends with your invite link.
+2. Build the app with [Flutter](https://docs.flutter.dev/get-started/install) and your phone connected:
+   ```bash
+   cd app && flutter run --release
+   ```
+3. Paste the link, choose your apps, connect.
 
-Maintainers build the downloads with [`scripts/release.sh`](scripts/release.sh). Building your own app? Use the [`detour_vpn`](packages/detour_vpn/README.md) package.
-
-## How it works
-
-The client opens a TLS connection to the server, authenticates with a username/password (bcrypt-checked server-side), and gets back an assigned IP. From then on both sides just relay length-prefixed raw IP packets between the phone's TUN interface and the server's TUN interface, which is NAT'd to the internet. The server's self-signed certificate is pinned by its exact SHA-256 fingerprint instead of validated against a CA — there's no domain, so there's nothing for a public CA to vouch for. Full protocol details are in [`server/README.md`](server/README.md).
+Android 8+, IPv4 only. Update the server and phones together.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE)

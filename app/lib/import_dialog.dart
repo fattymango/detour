@@ -2,12 +2,15 @@ import 'package:detour_vpn/detour_vpn.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// Pops with true once a config is imported, and stays open on errors.
+/// Pops with the name of the imported config, and stays open on errors.
 class ImportDialog extends StatefulWidget {
-  const ImportDialog({super.key, required this.vpn, required this.existingNames});
+  const ImportDialog({super.key, required this.vpn, required this.existingNames, this.pasteFirst = false});
 
   final VpnRepository vpn;
   final Set<String> existingNames;
+
+  /// Starts with what is on the clipboard.
+  final bool pasteFirst;
 
   @override
   State<ImportDialog> createState() => _ImportDialogState();
@@ -21,6 +24,12 @@ class _ImportDialogState extends State<ImportDialog> {
   TunnelConfig? _preview;
   bool _busy = false;
   String _suggested = '';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.pasteFirst) _paste();
+  }
 
   @override
   void dispose() {
@@ -86,7 +95,7 @@ class _ImportDialogState extends State<ImportDialog> {
       if (mounted) {
         setState(() => _busy = false);
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) Navigator.pop(context, true);
+          if (mounted) Navigator.pop(context, name);
         });
       }
       return;
@@ -119,7 +128,6 @@ class _ImportDialogState extends State<ImportDialog> {
                 hintText: 'detour://...',
                 errorText: _textError,
                 errorMaxLines: 3,
-                border: const OutlineInputBorder(),
                 suffixIcon: IconButton(icon: const Icon(Icons.content_paste), tooltip: 'Paste', onPressed: _paste),
               ),
             ),
@@ -138,8 +146,8 @@ class _ImportDialogState extends State<ImportDialog> {
           ],
         ),
         actions: [
-          TextButton(onPressed: _busy ? null : () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: _busy ? null : _import, child: Text(_busy ? 'Adding...' : 'Add')),
+          TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: _busy ? null : _import, child: Text(_busy ? 'Adding…' : 'Add')),
         ],
       ),
     );
