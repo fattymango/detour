@@ -6,21 +6,17 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 const defaultDBPath = "/var/lib/detour/users.db"
 
-// runUserCommand handles `detour-server adduser|deluser|listusers`, the
-// standalone replacement for what used to be auth-server's job. Each
-// subcommand opens the user db itself (read-write) and closes it when done -
-// these are one-shot CLI invocations, not the long-running server process.
+// runUserCommand handles the one-shot user commands. The running server
+// notices changes made here within syncInterval.
 func runUserCommand(cmd string, args []string) {
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	db := fs.String("db", defaultDBPath, "detour-server's user database")
 	fs.Parse(args)
+	rest := fs.Args()
 
 	userDB, err := openUserDB(*db)
 	if err != nil {
@@ -30,60 +26,62 @@ func runUserCommand(cmd string, args []string) {
 
 	switch cmd {
 	case "adduser":
-		rest := fs.Args()
 		if len(rest) < 1 {
 			log.Fatal("usage: detour-server adduser <username> [password]")
 		}
-		username := rest[0]
-		password := ""
+		name := rest[0]
+		if err := checkUsername(name); err != nil {
+			log.Fatal(err)
+		}
+		password := generatePassword()
 		if len(rest) >= 2 {
 			password = rest[1]
+		}
+		if _, exists := lookupUser(userDB, name); exists {
+			err = setPassword(userDB, name, password)
 		} else {
-			password = generatePassword()
+			err = addUser(userDB, name, password)
 		}
-		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 		if err != nil {
-			log.Fatalf("hashing password: %v", err)
-		}
-		if _, err := userDB.Exec(
-			"INSERT INTO users (username, password_hash) VALUES (?, ?) ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash",
-			username, string(hash),
-		); err != nil {
 			log.Fatalf("saving user: %v", err)
 		}
-		fmt.Printf("user %q added/updated\nusername: %s\npassword: %s\n", username, username, password)
+		fmt.Printf("user %q added/updated\nusername: %s\npassword: %s\n", name, name, password)
 
 	case "deluser":
-		rest := fs.Args()
 		if len(rest) < 1 {
 			log.Fatal("usage: detour-server deluser <username>")
 		}
-		if _, err := userDB.Exec("DELETE FROM users WHERE username = ?", rest[0]); err != nil {
+		if err := deleteUser(userDB, rest[0]); err != nil {
 			log.Fatalf("deleting user: %v", err)
 		}
 		fmt.Printf("user %q removed\n", rest[0])
 
+	case "setadmin":
+		if len(rest) != 2 || (rest[1] != "on" && rest[1] != "off") {
+			log.Fatal("usage: detour-server setadmin <username> on|off")
+		}
+		if err := setAdmin(userDB, rest[0], rest[1] == "on"); err != nil {
+			log.Fatalf("updating user: %v", err)
+		}
+		fmt.Printf("user %q admin: %s\n", rest[0], rest[1])
+
 	case "listusers":
-		rows, err := userDB.Query("SELECT username FROM users ORDER BY username")
+		users, err := listUsers(userDB)
 		if err != nil {
 			log.Fatalf("listing users: %v", err)
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var username string
-			if err := rows.Scan(&username); err != nil {
-				log.Fatalf("reading row: %v", err)
+		for _, u := range users {
+			if u.admin {
+				fmt.Println(u.name, "(admin)")
+			} else {
+				fmt.Println(u.name)
 			}
-			fmt.Println(username)
 		}
 	}
 }
 
 func generatePassword() string {
 	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		fmt.Fprintln(os.Stderr, "warning: crypto/rand failed, this should never happen:", err)
-		os.Exit(1)
-	}
+	rand.Read(buf) // never fails: crypto/rand aborts the program instead
 	return base64.RawURLEncoding.EncodeToString(buf)
 }

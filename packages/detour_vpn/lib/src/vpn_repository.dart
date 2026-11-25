@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 
 import 'vpn_channel.dart';
-import 'models/ad_blocked_domain.dart';
+import 'models/server_user.dart';
 import 'models/tunnel_config.dart';
 import 'models/tunnel_status.dart';
 import 'models/vpn_log_entry.dart';
@@ -35,6 +35,16 @@ class VpnRepository {
     }
   }
 
+  /// Checks a link or config text without saving it. The name is a suggestion
+  /// and may be empty.
+  Future<TunnelConfig> previewConfig(String text) async {
+    try {
+      return TunnelConfig.fromMap(await _channel.previewConfig(text));
+    } on PlatformException catch (e) {
+      throw VpnRepositoryException(e.message ?? 'Invalid config');
+    }
+  }
+
   Future<List<TunnelConfig>> listConfigs() async {
     final raw = await _channel.listConfigs();
     return raw.map(TunnelConfig.fromMap).toList();
@@ -47,6 +57,67 @@ class VpnRepository {
 
   Future<void> setIncludedApps(String name, List<String> packages) =>
       _channel.setIncludedApps(name, packages);
+
+  /// Whether the saved config [name]'s user is an admin of its server, or null
+  /// if the server can't be reached. The server checks every request anyway.
+  Future<bool?> isServerAdmin(String name) async {
+    try {
+      await _channel.adminRequest(name, 'list');
+      return true;
+    } on PlatformException catch (e) {
+      return e.code == 'admin_failed' ? false : null;
+    }
+  }
+
+  /// Users of the server behind the saved config [name]. Like the other admin
+  /// calls, throws [VpnRepositoryException] unless that config's user is an admin.
+  Future<List<ServerUser>> listServerUsers(String name) async {
+    final reply = await _admin(name, 'list');
+    return (reply['users'] as List).cast<Map<dynamic, dynamic>>().map(ServerUser.fromMap).toList();
+  }
+
+  /// Creates a user and returns a link for them to import.
+  Future<String> addServerUser(String name, String username) async =>
+      (await _admin(name, 'add', username))['config'] as String;
+
+  /// Disconnects the user, changes their password and returns a new link.
+  Future<String> resetServerUser(String name, String username) async =>
+      (await _admin(name, 'reset', username))['config'] as String;
+
+  /// Removes the user and disconnects them right away.
+  Future<void> removeServerUser(String name, String username) => _admin(name, 'remove', username);
+
+  /// Sets the user's limits, effective right away. 0 means unlimited.
+  Future<void> setServerUserLimits(
+    String name,
+    String username, {
+    required int speedKbps,
+    required int quotaBytes,
+  }) =>
+      _admin(name, 'setlimits', username, speedKbps, quotaBytes);
+
+  /// Starts counting the user's data usage from zero again.
+  Future<void> resetServerUserUsage(String name, String username) => _admin(name, 'resetusage', username);
+
+  Future<Map<dynamic, dynamic>> _admin(
+    String name,
+    String op, [
+    String? username,
+    int speedKbps = 0,
+    int quotaBytes = 0,
+  ]) async {
+    try {
+      return await _channel.adminRequest(
+        name,
+        op,
+        username: username,
+        speedKbps: speedKbps,
+        quotaBytes: quotaBytes,
+      );
+    } on PlatformException catch (e) {
+      throw VpnRepositoryException(e.message ?? 'Request failed');
+    }
+  }
 
   Future<void> connect(String name) async {
     try {
@@ -66,17 +137,6 @@ class VpnRepository {
   Future<bool> hasBatteryExemption() => _channel.hasBatteryExemption();
 
   Future<void> requestBatteryExemption() => _channel.requestBatteryExemption();
-
-  Future<bool> isAdBlockEnabled() => _channel.isAdBlockEnabled();
-
-  Future<void> setAdBlockEnabled(bool enabled) => _channel.setAdBlockEnabled(enabled);
-
-  Future<int> getAdBlockedCount() => _channel.getAdBlockedCount();
-
-  Future<List<AdBlockedDomain>> getAdBlockedDomains() async {
-    final raw = await _channel.getAdBlockedDomains();
-    return raw.map(AdBlockedDomain.fromMap).toList();
-  }
 }
 
 class VpnRepositoryException implements Exception {

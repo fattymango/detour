@@ -10,7 +10,7 @@ WireGuard and OpenVPN both work fine in general, but some networks block WireGua
 
 1. Client opens a TCP connection to the server and performs a TLS handshake.
 2. Client sends an auth frame: `1 byte username length | username | 1 byte password length | password`.
-3. Server checks the username/password (bcrypt) against its own user database. Response: `1 byte status (0=ok, 1=fail)`, and if ok, `4 bytes` assigned IPv4 address.
+3. Server checks the username/password (bcrypt) against its own user database. Response: `1 byte status` (0=ok, others under "Admin protocol"), and if ok, `4 bytes` assigned IPv4 address.
 4. From then on, both directions relay length-prefixed raw IP packets (`2-byte big-endian length | packet bytes`) between the client's local TUN device and the server's shared TUN device, NAT'd out to the internet.
 
 No CA, no domain: the server's certificate is self-signed with the server's IP as the Subject Alternative Name. The client pins the certificate's exact SHA-256 fingerprint instead of validating a certificate chain — same trust model as WireGuard pinning a public key, applied to TLS.
@@ -78,13 +78,27 @@ The binary configures its own TUN device (creates it, assigns `10.10.0.1/24`, br
 ```bash
 detour-server adduser <username> [password]   # omit password to auto-generate one
 detour-server deluser <username>
+detour-server setadmin <username> on|off
 detour-server listusers
 ```
 
-All three default to `/var/lib/detour/users.db` (override with `--db`); `serve` reads the same file with `--db`.
+All of them default to `/var/lib/detour/users.db` (override with `--db`); `serve` reads the same file with `--db`.
+
+Every server is independent: it has its own users and its own admins. Make the first admin with `setadmin` on the server. Admins can then add, reset and remove that server's users from the app (**⋮ → Manage users**), but only the CLI can make or unmake admins.
+
+Removing a user or changing their password disconnects them: right away from the app, within 5 seconds from the CLI.
+
+Admins can also give each user a speed limit (each way, shared by all their devices) and a total data allowance (upload plus download, counted until an admin resets it). The server enforces both: packets over the speed are dropped, and a user who runs out is disconnected and refused. Usage is saved every 5 seconds, so a restart can lose that much.
+
+## Admin protocol
+
+An admin client sends a `0` byte before the normal auth frame. After status `0` it sends one framed JSON request (`{"op": "list"|"add"|"reset"|"remove"|"setlimits"|"resetusage", "username": "...", "speedKbps": 0, "quotaBytes": 0}`) and gets one line of JSON back, with `error` set on failure.
+
+Login status bytes: `0` ok, `1` access denied, `2` no free addresses, `3` data limit reached.
 
 ## Notes / limitations
 
 - No traffic logging by design. Logs show only connection lifecycle events (connect/disconnect/auth failure), never packet contents.
-- The IP allocator hands out addresses sequentially and doesn't reuse them within a process lifetime — restart the service if you're churning through the `/24` (254 addresses; a non-issue for personal use).
+- Up to 252 clients at once. An address is freed when its client disconnects, or about 40 seconds after a connection dies silently.
+- Logins must finish within 10 seconds. Each source IP (IPv6: each /64) gets 8 logins in progress and 10 wrong passwords per 5 minutes, with 128 logins in progress overall. People sharing one public IP share that limit; restarting the server clears it.
 - Single shared TUN device for all clients; the server dispatches packets to the right client by destination IP against a small in-memory map.

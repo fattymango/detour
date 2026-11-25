@@ -1,8 +1,11 @@
 package com.detour.vpn
 
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.cert.CertificateException
@@ -36,6 +39,59 @@ private fun buildPinnedSslContext(expectedFingerprintHex: String): SSLContext {
     return SSLContext.getInstance("TLS").apply { init(null, arrayOf(trustManager), SecureRandom()) }
 }
 
+/** The server refused this username and password; retrying can't help. */
+class AccessDeniedException : IOException("Access denied: removed by the admin, or wrong password")
+
+class DataLimitException : IOException("Data limit reached, ask the admin for more")
+
+private const val TIMEOUT_MS = 15_000
+private const val ADMIN_MARKER = 0
+
+/** Connects and logs in, returning a socket positioned just after an accepted status byte. */
+private fun openAuthenticated(config: TunnelConfig, admin: Boolean): SSLSocket {
+    val user = config.username.toByteArray(Charsets.UTF_8)
+    val pass = config.password.toByteArray(Charsets.UTF_8)
+    require(user.size in 1..255 && pass.size <= 255) { "Username or password has an invalid length" }
+
+    val raw = Socket()
+    try {
+        raw.connect(InetSocketAddress(config.host, config.port), TIMEOUT_MS)
+        raw.soTimeout = TIMEOUT_MS
+        val s = buildPinnedSslContext(config.fingerprint).socketFactory
+            .createSocket(raw, config.host, config.port, true) as SSLSocket
+        s.startHandshake()
+
+        val frame = ByteArrayOutputStream()
+        if (admin) frame.write(ADMIN_MARKER)
+        frame.write(user.size)
+        frame.write(user)
+        frame.write(pass.size)
+        frame.write(pass)
+        s.outputStream.write(frame.toByteArray())
+        s.outputStream.flush()
+
+        val status = ByteArray(1)
+        readFully(s.inputStream, status)
+        when (status[0].toInt()) {
+            0 -> return s
+            1 -> throw AccessDeniedException()
+            3 -> throw DataLimitException()
+            else -> throw IOException("Server is full")
+        }
+    } catch (e: Exception) {
+        raw.close()
+        throw e
+    }
+}
+
+/** Sends one admin request (JSON) to the server and returns its JSON reply. */
+fun sendAdminRequest(config: TunnelConfig, json: String): String =
+    openAuthenticated(config, admin = true).use { s ->
+        val body = json.toByteArray(Charsets.UTF_8)
+        writeFramedPacket(s.outputStream, body, body.size)
+        s.inputStream.bufferedReader().readLine() ?: throw IOException("Connection closed")
+    }
+
 /** Handles the TLS connect + username/password auth handshake for one session. */
 class TunnelClient(private val config: TunnelConfig) {
     var socket: SSLSocket? = null
@@ -45,31 +101,15 @@ class TunnelClient(private val config: TunnelConfig) {
 
     @Throws(Exception::class)
     fun connectAndAuthenticate() {
-        val factory = buildPinnedSslContext(config.fingerprint).socketFactory
-        val s = factory.createSocket(config.host, config.port) as SSLSocket
-        s.startHandshake()
-
-        val out = s.outputStream
-        val input = s.inputStream
-
-        val userBytes = config.username.toByteArray(Charsets.UTF_8)
-        val passBytes = config.password.toByteArray(Charsets.UTF_8)
-        val authFrame = ByteArray(1 + userBytes.size + 1 + passBytes.size)
-        var offset = 0
-        authFrame[offset++] = userBytes.size.toByte()
-        userBytes.copyInto(authFrame, offset); offset += userBytes.size
-        authFrame[offset++] = passBytes.size.toByte()
-        passBytes.copyInto(authFrame, offset)
-        out.write(authFrame)
-        out.flush()
-
-        val response = ByteArray(5)
-        readFully(input, response)
-        if (response[0].toInt() != 0) {
+        val s = openAuthenticated(config, admin = false)
+        val ip = ByteArray(4)
+        try {
+            readFully(s.inputStream, ip)
+        } catch (e: Exception) {
             s.close()
-            throw IOException("Authentication rejected by server")
+            throw e
         }
-        assignedAddress = "${response[1].toUByte()}.${response[2].toUByte()}.${response[3].toUByte()}.${response[4].toUByte()}"
+        assignedAddress = ip.joinToString(".") { it.toUByte().toString() }
         socket = s
     }
 

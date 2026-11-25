@@ -1,5 +1,5 @@
 name: detour_vpn
-description: A self-hosted, split-tunnel VPN plugin (per-app routing, low battery use, built-in ad blocking) that talks to a detour-server instance.
+description: A self-hosted, split-tunnel VPN plugin (per-app routing, low battery use, per-user limits) that talks to a detour-server instance.
 version: 0.1.0
 homepage: https://github.com/
 

@@ -40,7 +40,6 @@ class TunnelVpnService : VpnService() {
     private var tunFd: ParcelFileDescriptor? = null
     private var client: TunnelClient? = null
     private var relayThreads: List<Thread> = emptyList()
-    private val adBlockSettings by lazy { AdBlockSettings(applicationContext) }
 
     // Without this, Doze/App Standby can suspend the heartbeat thread's CPU
     // time while the screen is off, so no heartbeat actually reaches the
@@ -73,6 +72,7 @@ class TunnelVpnService : VpnService() {
         when (intent?.action) {
             ACTION_CONNECT -> {
                 val name = intent.getStringExtra(EXTRA_CONFIG_NAME) ?: return START_NOT_STICKY
+                WidgetConfigStore(applicationContext).setLastConfig(name)
                 executor.execute {
                     userInitiatedDisconnect = false
                     doConnect(name)
@@ -100,6 +100,10 @@ class TunnelVpnService : VpnService() {
         // better UX: shows "Connecting..." instead of no notification at
         // all until the handshake finishes.
         startForeground(NOTIFICATION_ID, buildNotification(name, connecting = true))
+        if (currentState != "RECONNECTING") {
+            currentState = "CONNECTING"
+            notifyState(name, "CONNECTING")
+        }
         try {
             // In case a previous session is still up. Android doesn't always
             // release the old VPN interface synchronously just because its
@@ -130,7 +134,10 @@ class TunnelVpnService : VpnService() {
                 .addDnsServer("1.1.1.1")
                 .setMtu(1400)
 
-            for (pkg in config.includedApplications) {
+            // This app stays outside its own tunnel, so it can always reach the server.
+            val included = config.includedApplications.filter { it != packageName }
+            if (included.isEmpty()) builder.addDisallowedApplication(packageName)
+            for (pkg in included) {
                 try {
                     builder.addAllowedApplication(pkg)
                 } catch (e: PackageManager.NameNotFoundException) {
@@ -161,8 +168,7 @@ class TunnelVpnService : VpnService() {
             val tunIn = FileInputStream(pfd.fileDescriptor)
             val tunOut = FileOutputStream(pfd.fileDescriptor)
 
-            val adBlockEnabled = adBlockSettings.isEnabled()
-            val tunToServer = Thread({ relayTunToServer(tunIn, socketOut, tunOut, adBlockEnabled, mySession) }, "tun-to-server")
+            val tunToServer = Thread({ relayTunToServer(tunIn, socketOut, mySession) }, "tun-to-server")
             val serverToTun = Thread({ relayServerToTun(socket.inputStream, tunOut, mySession) }, "server-to-tun")
             val heartbeat = Thread({ heartbeatLoop(socketOut) }, "heartbeat")
             relayThreads = listOf(tunToServer, serverToTun, heartbeat)
@@ -178,16 +184,17 @@ class TunnelVpnService : VpnService() {
         } catch (e: Exception) {
             Log.e(TAG, "connect failed", e)
             VpnLogStore.log("Connect to $name failed: ${e.message}")
-            handleSessionEnded(mySession, name)
+            handleSessionEnded(mySession, name, if (e is AccessDeniedException || e is DataLimitException) e.message else null)
         }
     }
 
     /** (configName, state) - invoked off the main thread; caller must post to UI. */
     private fun notifyState(name: String?, state: String) {
         stateListener?.invoke(name, state)
+        VpnWidgetProvider.refreshAll(applicationContext)
     }
 
-    private fun relayTunToServer(tunIn: FileInputStream, serverOut: OutputStream, tunOut: FileOutputStream, adBlockEnabled: Boolean, session: Long) {
+    private fun relayTunToServer(tunIn: FileInputStream, serverOut: OutputStream, session: Long) {
         val buffer = ByteArray(32767)
         try {
             while (true) {
@@ -208,14 +215,6 @@ class TunnelVpnService : VpnService() {
                     // sustained ~100% CPU independent of actual traffic).
                     Thread.sleep(5)
                     continue
-                }
-
-                if (adBlockEnabled) {
-                    val blockedReply = AdBlockFilter.tryHandleDns(applicationContext, buffer, n)
-                    if (blockedReply != null) {
-                        tunOut.write(blockedReply)
-                        continue // never forwarded into the tunnel
-                    }
                 }
 
                 writeFramedPacket(serverOut, buffer, n)
@@ -258,7 +257,7 @@ class TunnelVpnService : VpnService() {
      * on its own (e.g. that idle-timeout scenario) - retry with backoff, up
      * to a point.
      */
-    private fun handleSessionEnded(session: Long, name: String?) {
+    private fun handleSessionEnded(session: Long, name: String?, fatalError: String? = null) {
         // Multiple relay threads can notice the same dead session at once;
         // only the one that wins this CAS proceeds; a stale session (already
         // superseded by a newer doConnect) fails it too, since the value
@@ -270,10 +269,10 @@ class TunnelVpnService : VpnService() {
             return
         }
 
-        if (name == null || reconnectAttempts >= RECONNECT_DELAYS_MS.size) {
+        if (fatalError != null || name == null || reconnectAttempts >= RECONNECT_DELAYS_MS.size) {
             currentState = "DOWN"
             currentConfigName = null
-            notifyState(name, "ERROR:Connection lost")
+            notifyState(name, "ERROR:${fatalError ?: "Connection lost"}")
             VpnLogStore.log("Connection to $name lost, giving up after $reconnectAttempts attempt(s)")
             tearDown()
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -381,7 +380,7 @@ class TunnelVpnService : VpnService() {
         private const val READ_TIMEOUT_MS = 40_000
         private val RECONNECT_DELAYS_MS = longArrayOf(2_000, 4_000, 8_000, 16_000, 30_000)
 
-        /** "UP", "DOWN", "RECONNECTING", or "ERROR:<message>" */
+        /** "UP", "DOWN", "CONNECTING", "RECONNECTING", or "ERROR:<message>" */
         @Volatile var currentState: String = "DOWN"
             private set
 

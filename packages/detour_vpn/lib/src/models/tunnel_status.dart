@@ -15,6 +15,7 @@ class TunnelStatus {
     final state = switch (rawState) {
       'UP' => TunnelState.connected,
       'DOWN' => TunnelState.disconnected,
+      'CONNECTING' => TunnelState.connecting,
       'RECONNECTING' => TunnelState.reconnecting,
       _ when rawState.startsWith('ERROR') => TunnelState.error,
       _ => TunnelState.disconnected,

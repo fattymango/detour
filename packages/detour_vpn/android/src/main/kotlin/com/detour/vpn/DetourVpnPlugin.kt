@@ -16,11 +16,14 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
+import kotlin.concurrent.thread
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Flutter plugin entry point: wires the `detour_vpn/vpn` method channel and
  * `detour_vpn/vpn/state` event channel to [TunnelVpnService]/[ConfigStore]/
- * [AdBlockSettings]/[VpnLogStore]. Host apps only need to add this package as
+ * [VpnLogStore]. Host apps only need to add this package as
  * a dependency - no manual MainActivity wiring required.
  */
 class DetourVpnPlugin :
@@ -33,7 +36,6 @@ class DetourVpnPlugin :
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var appContext: Context
     private lateinit var configStore: ConfigStore
-    private lateinit var adBlockSettings: AdBlockSettings
     private var methodChannel: MethodChannel? = null
     private var eventChannel: EventChannel? = null
     private var eventSink: EventChannel.EventSink? = null
@@ -43,8 +45,8 @@ class DetourVpnPlugin :
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
         configStore = ConfigStore(appContext)
-        adBlockSettings = AdBlockSettings(appContext)
         VpnLogStore.init(appContext)
+        VpnWidgetProvider.refreshAll(appContext)
         TunnelVpnService.stateListener = { name, state ->
             mainHandler.post {
                 eventSink?.success(mapOf("state" to state, "name" to name, "stats" to null))
@@ -137,6 +139,23 @@ class DetourVpnPlugin :
                 }
             }
 
+            "previewConfig" -> {
+                try {
+                    val config = parseConfig(args["text"] as String)
+                    result.success(
+                        mapOf(
+                            "name" to config.name,
+                            "includedApplications" to config.includedApplications,
+                            "endpointHost" to config.host,
+                            "endpointPort" to config.port,
+                            "username" to config.username,
+                        )
+                    )
+                } catch (e: ConfigParseException) {
+                    result.error("bad_config", e.message ?: "Invalid tunnel config", null)
+                }
+            }
+
             "listConfigs" -> {
                 try {
                     result.success(configStore.listNames().map { configStore.toMap(it) })
@@ -175,6 +194,43 @@ class DetourVpnPlugin :
                 }
             }
 
+            "adminRequest" -> {
+                val name = args["name"] as String
+                val op = args["op"] as String
+                val username = args["username"] as? String ?: ""
+                thread {
+                    try {
+                        val request = JSONObject().put("op", op).put("username", username)
+                            .put("speedKbps", (args["speedKbps"] as? Number)?.toLong() ?: 0L)
+                            .put("quotaBytes", (args["quotaBytes"] as? Number)?.toLong() ?: 0L)
+                        val reply = JSONObject(sendAdminRequest(configStore.loadConfig(name), request.toString()))
+                        val error = reply.optString("error")
+                        val password = reply.optString("password")
+                        val users = reply.optJSONArray("users") ?: JSONArray()
+                        val value = mapOf(
+                            "users" to List(users.length()) { i ->
+                                val u = users.getJSONObject(i)
+                                mapOf(
+                                    "username" to u.getString("username"),
+                                    "admin" to u.getBoolean("admin"),
+                                    "connected" to u.getInt("connected"),
+                                    "speedKbps" to u.optLong("speedKbps"),
+                                    "quotaBytes" to u.optLong("quotaBytes"),
+                                    "usedBytes" to u.optLong("usedBytes"),
+                                )
+                            },
+                            "config" to if (password.isEmpty()) null else configStore.configLinkFor(name, username, password),
+                        )
+                        mainHandler.post {
+                            if (error.isEmpty()) result.success(value) else result.error("admin_failed", error, null)
+                        }
+                    } catch (e: Exception) {
+                        val code = if (e is AccessDeniedException) "admin_failed" else "unreachable"
+                        mainHandler.post { result.error(code, e.message ?: "Request failed", null) }
+                    }
+                }
+            }
+
             "connect" -> {
                 val name = args["name"] as String
                 val intent = Intent(appContext, TunnelVpnService::class.java)
@@ -210,21 +266,6 @@ class DetourVpnPlugin :
                     )
                 )
             }
-
-            "isAdBlockEnabled" -> result.success(adBlockSettings.isEnabled())
-
-            "setAdBlockEnabled" -> {
-                adBlockSettings.setEnabled(args["enabled"] as? Boolean ?: true)
-                result.success(null)
-            }
-
-            "getAdBlockedCount" -> result.success(AdBlockFilter.blockedCount.get())
-
-            "getAdBlockedDomains" -> result.success(
-                AdBlockFilter.recentDomains().map {
-                    mapOf("domain" to it.domain, "timestampMillis" to it.timestampMillis)
-                }
-            )
 
             "hasBatteryExemption" -> {
                 val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager

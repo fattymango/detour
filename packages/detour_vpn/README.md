@@ -4,7 +4,8 @@ A Flutter plugin for a self-hosted, split-tunnel VPN that talks to [`detour-serv
 
 - Per-app tunneling (only the apps you pick route through the VPN — everything else bypasses it at the OS level)
 - Low battery use (a single background `VpnService` + wake lock held only while connected, no polling)
-- Built-in DNS-level ad blocking
+- Admin calls to list, add, limit, reset and remove a server's users (`listServerUsers` and friends), for configs whose user is an admin
+- A home-screen widget that toggles the last-used config (remove it with `tools:node="remove"` on `com.detour.vpn.VpnWidgetProvider` in your manifest)
 - A connection log and live status stream
 
 Currently Android only (`android.net.VpnService`). No iOS implementation exists yet — contributions welcome.
@@ -44,7 +45,9 @@ await vpn.connect('home');
 vpn.watchStatus().listen((status) => print(status.state));
 ```
 
-See [`tunnel_config.dart`](lib/src/models/tunnel_config.dart) for the config shape and [`vpn_repository.dart`](lib/src/vpn_repository.dart) for the full API (list/rename/delete configs, per-app allow-list, ad-block toggle, logs, battery-optimization exemption).
+`importConfig` also accepts an invite link, `detour://user:password@host:port/fingerprint?name=suggested`, with the values percent-encoded. `previewConfig` checks either without saving.
+
+See [`tunnel_config.dart`](lib/src/models/tunnel_config.dart) for the config shape and [`vpn_repository.dart`](lib/src/vpn_repository.dart) for the full API (list/rename/delete configs, per-app allow-list, logs, battery-optimization exemption).
 
 ## How it works
 

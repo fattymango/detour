@@ -4,7 +4,9 @@ import 'package:detour_vpn/detour_vpn.dart';
 import 'package:flutter/material.dart';
 
 import 'app_selector_screen.dart';
+import 'import_dialog.dart';
 import 'logs_screen.dart';
+import 'users_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -18,14 +20,15 @@ class _HomeScreenState extends State<HomeScreen> {
   List<TunnelConfig> _configs = [];
   TunnelStatus _status = const TunnelStatus.initial();
   StreamSubscription<TunnelStatus>? _statusSub;
-  bool _adBlockEnabled = true;
+
+  // Answered servers only, so each is asked once and unreachable ones are retried.
+  final _isAdmin = <String, bool>{};
 
   @override
   void initState() {
     super.initState();
     _statusSub = _vpn.watchStatus().listen((s) => setState(() => _status = s));
     _vpn.currentStatus().then((s) => setState(() => _status = s));
-    _vpn.isAdBlockEnabled().then((v) => setState(() => _adBlockEnabled = v));
     _loadConfigs();
   }
 
@@ -37,7 +40,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadConfigs() async {
     final configs = await _vpn.listConfigs();
+    if (!mounted) return;
     setState(() => _configs = configs);
+    for (final config in configs) {
+      if (!_isAdmin.containsKey(config.name)) _checkAdmin(config.name);
+    }
+  }
+
+  Future<void> _checkAdmin(String name) async {
+    final admin = await _vpn.isServerAdmin(name);
+    if (mounted && admin != null) setState(() => _isAdmin[name] = admin);
   }
 
   Future<void> _connect(String name) async {
@@ -49,46 +61,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _importConfigDialog() async {
-    final nameController = TextEditingController();
-    final textController = TextEditingController();
-    final ok = await showDialog<bool>(
+    final imported = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Import config'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(labelText: 'Name'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: textController,
-              maxLines: 8,
-              decoration: const InputDecoration(
-                labelText: 'Config text',
-                hintText: 'host: 1.2.3.4\nport: 443\nusername: alice\n'
-                    'password: ...\nfingerprint: AA:BB:...\napps: ',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Import')),
-        ],
-      ),
+      builder: (_) => ImportDialog(vpn: _vpn, existingNames: _configs.map((c) => c.name).toSet()),
     );
-    if (ok != true) return;
-    try {
-      await _vpn.importConfig(name: nameController.text.trim(), text: textController.text);
-      await _loadConfigs();
-    } on VpnRepositoryException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
-    }
+    if (imported == true) await _loadConfigs();
   }
 
   @override
@@ -105,14 +82,6 @@ class _HomeScreenState extends State<HomeScreen> {
               context,
               MaterialPageRoute(builder: (_) => LogsScreen(vpn: _vpn)),
             ),
-          ),
-          IconButton(
-            icon: Icon(_adBlockEnabled ? Icons.shield : Icons.shield_outlined),
-            tooltip: 'Ad blocking',
-            onPressed: () async {
-              await _vpn.setAdBlockEnabled(!_adBlockEnabled);
-              setState(() => _adBlockEnabled = !_adBlockEnabled);
-            },
           ),
         ],
       ),
@@ -151,14 +120,24 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 );
                                 _loadConfigs();
+                              case 'users':
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => UsersScreen(vpn: _vpn, config: config),
+                                  ),
+                                );
                               case 'delete':
                                 await _vpn.deleteConfig(config.name);
+                                _isAdmin.remove(config.name);
                                 _loadConfigs();
                             }
                           },
-                          itemBuilder: (context) => const [
-                            PopupMenuItem(value: 'apps', child: Text('Select apps')),
-                            PopupMenuItem(value: 'delete', child: Text('Delete')),
+                          itemBuilder: (context) => [
+                            const PopupMenuItem(value: 'apps', child: Text('Select apps')),
+                            if (_isAdmin[config.name] ?? false)
+                              const PopupMenuItem(value: 'users', child: Text('Manage users')),
+                            const PopupMenuItem(value: 'delete', child: Text('Delete')),
                           ],
                         ),
                       );

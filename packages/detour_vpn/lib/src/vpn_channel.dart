@@ -31,6 +31,10 @@ class VpnChannel {
     return _methodChannel.invokeMethod('importConfig', {'name': name, 'text': text});
   }
 
+  Future<Map<dynamic, dynamic>> previewConfig(String text) async {
+    return (await _methodChannel.invokeMethod<Map<dynamic, dynamic>>('previewConfig', {'text': text}))!;
+  }
+
   Future<List<Map<dynamic, dynamic>>> listConfigs() async {
     final result = await _methodChannel.invokeMethod<List<dynamic>>('listConfigs');
     return (result ?? const []).cast<Map<dynamic, dynamic>>();
@@ -49,6 +53,26 @@ class VpnChannel {
       'name': name,
       'packages': packages,
     });
+  }
+
+  Future<Map<dynamic, dynamic>> adminRequest(
+    String name,
+    String op, {
+    String? username,
+    int speedKbps = 0,
+    int quotaBytes = 0,
+  }) async {
+    final reply = await _methodChannel.invokeMethod<Map<dynamic, dynamic>>(
+      'adminRequest',
+      {
+        'name': name,
+        'op': op,
+        'username': username,
+        'speedKbps': speedKbps,
+        'quotaBytes': quotaBytes,
+      },
+    );
+    return reply!;
   }
 
   Future<void> connect(String name) {
@@ -74,22 +98,5 @@ class VpnChannel {
 
   Future<void> requestBatteryExemption() {
     return _methodChannel.invokeMethod('requestBatteryExemption');
-  }
-
-  Future<bool> isAdBlockEnabled() async {
-    return await _methodChannel.invokeMethod<bool>('isAdBlockEnabled') ?? true;
-  }
-
-  Future<void> setAdBlockEnabled(bool enabled) {
-    return _methodChannel.invokeMethod('setAdBlockEnabled', {'enabled': enabled});
-  }
-
-  Future<int> getAdBlockedCount() async {
-    return await _methodChannel.invokeMethod<int>('getAdBlockedCount') ?? 0;
-  }
-
-  Future<List<Map<dynamic, dynamic>>> getAdBlockedDomains() async {
-    final result = await _methodChannel.invokeMethod<List<dynamic>>('getAdBlockedDomains');
-    return (result ?? const []).cast<Map<dynamic, dynamic>>();
   }
 }

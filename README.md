@@ -4,7 +4,7 @@ A self-hosted, split-tunnel VPN: run `detour-server` on your own box, connect yo
 
 - **Per-app tunneling** — only the apps you choose use the VPN; everything else bypasses it at the OS level.
 - **Low battery use** — one background service, no polling, a wake lock held only while actually connected.
-- **Built-in ad blocking** — DNS-level, on by default, toggle per device.
+- **Per-user limits** — admins set each user's speed and total data in the app; the server enforces them.
 - **No central service, no accounts with a third party** — you run the server, you own the user list.
 
 ## Layout

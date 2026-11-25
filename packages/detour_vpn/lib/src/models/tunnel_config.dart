@@ -6,6 +6,7 @@ class TunnelConfig extends Equatable {
     required this.includedApplications,
     this.endpointHost,
     this.endpointPort,
+    this.username,
   });
 
   factory TunnelConfig.fromMap(Map<dynamic, dynamic> map) {
@@ -16,6 +17,7 @@ class TunnelConfig extends Equatable {
       ),
       endpointHost: map['endpointHost'] as String?,
       endpointPort: (map['endpointPort'] as num?)?.toInt(),
+      username: map['username'] as String?,
     );
   }
 
@@ -24,6 +26,9 @@ class TunnelConfig extends Equatable {
   final String? endpointHost;
   final int? endpointPort;
 
+  /// Only set by a preview.
+  final String? username;
+
   @override
-  List<Object?> get props => [name, includedApplications, endpointHost, endpointPort];
+  List<Object?> get props => [name, includedApplications, endpointHost, endpointPort, username];
 }
