@@ -5,6 +5,7 @@
 library detour_vpn;
 
 export 'src/vpn_repository.dart';
+export 'src/models/idle_action.dart';
 export 'src/models/server_user.dart';
 export 'src/models/tunnel_config.dart';
 export 'src/models/tunnel_status.dart';

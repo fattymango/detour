@@ -1,6 +1,8 @@
 # Go
 server/detour-server-*
 
+dist/
+
 # Flutter / Dart
 **/.dart_tool/
 **/.flutter-plugins

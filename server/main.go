@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"database/sql"
 	"encoding/binary"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/songgao/water"
@@ -30,15 +32,17 @@ var (
 	subnet     = flag.String("subnet", "10.10.0", "subnet /24 prefix, e.g. 10.10.0 -> 10.10.0.1 is server, .2+ handed to clients")
 )
 
-// Heartbeats (zero-length frames) keep the TCP connection looking "active" to
-// any middlebox tracking connection state (routers, DPI, carrier-grade NAT),
-// which otherwise silently drop it after a minute or so of no real traffic
-// (e.g. between video segments) - the client then hangs forever waiting for
-// data that will never come. readTimeout must be well above heartbeatInterval
-// so a couple of missed/delayed heartbeats don't cause a false disconnect.
+// Keeping a connection alive costs phones battery, so it's up to the client:
+// it sends a ping when it wants to know the connection still works, and gets a
+// pong back. Older clients never ping; they expect a zero-length heartbeat
+// every heartbeatInterval, and are dropped after readTimeout without one.
 const (
 	heartbeatInterval = 15 * time.Second
 	readTimeout       = 40 * time.Second
+	pingReadTimeout   = 30 * time.Minute
+
+	framePing = 1
+	framePong = 2
 )
 
 // clientQueue bounds the packets waiting for one client.
@@ -54,6 +58,8 @@ type client struct {
 	user    user
 	meter   *meter
 	in, out chan packet
+	pings   atomic.Bool
+	pong    chan struct{}
 }
 
 type packet struct {
@@ -109,6 +115,7 @@ type server struct {
 	clients map[[4]byte]*client
 	nextIP  byte
 	usedIPs [256]bool
+	lastIP  map[string]byte
 	logins  loginLimiter
 	meters  map[string]*meter
 	syncMu  sync.Mutex // serializes usage flushes and user changes
@@ -183,10 +190,13 @@ func runServe() {
 	go s.syncLoop()
 
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
-	ln, err := tls.Listen("tcp", *listenAddr, tlsCfg)
+	// Go's default TCP keep-alives would wake sleeping phones every 15 seconds.
+	lc := net.ListenConfig{KeepAlive: -1}
+	tcp, err := lc.Listen(context.Background(), "tcp", *listenAddr)
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
+	ln := tls.NewListener(tcp, tlsCfg)
 	log.Printf("listening on %s", *listenAddr)
 
 	for {
@@ -241,6 +251,10 @@ func (s *server) handleConn(conn net.Conn) {
 		s.handleAdmin(conn, r, u)
 		return
 	}
+	if u.invite {
+		conn.Write([]byte{4})
+		return
+	}
 	m := s.meterFor(u)
 	if m.overQuota() {
 		log.Printf("user %q is over their data limit", u.name)
@@ -249,7 +263,7 @@ func (s *server) handleConn(conn net.Conn) {
 	}
 	conn.SetDeadline(time.Time{})
 
-	ip, ok := s.allocateIP()
+	ip, ok := s.allocateIP(u.name)
 	if !ok {
 		log.Printf("no free IPs for user %q", u.name)
 		conn.Write([]byte{2})
@@ -264,7 +278,7 @@ func (s *server) handleConn(conn net.Conn) {
 		return
 	}
 
-	c := &client{conn: conn, ip: ip, user: u, meter: m, in: make(chan packet, clientQueue), out: make(chan packet, clientQueue)}
+	c := &client{conn: conn, ip: ip, user: u, meter: m, in: make(chan packet, clientQueue), out: make(chan packet, clientQueue), pong: make(chan struct{}, 1)}
 	s.mu.Lock()
 	s.clients[ip] = c
 	s.mu.Unlock()
@@ -281,11 +295,18 @@ func (s *server) handleConn(conn net.Conn) {
 	go func() {
 		ticker := time.NewTicker(heartbeatInterval)
 		defer ticker.Stop()
+		beat := ticker.C
 		for {
 			select {
 			case <-done:
 				return
-			case <-ticker.C:
+			case <-c.pong:
+				ticker.Stop()
+				beat = nil
+				if err := c.writeFramedLocked([]byte{framePong}); err != nil {
+					return
+				}
+			case <-beat:
 				if err := c.writeFramedLocked(nil); err != nil {
 					return
 				}
@@ -298,7 +319,11 @@ func (s *server) handleConn(conn net.Conn) {
 	// heartbeat, within readTimeout) so the goroutine/IP get cleaned up
 	// instead of leaking forever.
 	for {
-		conn.SetReadDeadline(time.Now().Add(readTimeout))
+		timeout := readTimeout
+		if c.pings.Load() {
+			timeout = pingReadTimeout
+		}
+		conn.SetReadDeadline(time.Now().Add(timeout))
 		pkt, err := readFramed(r)
 		if err != nil {
 			if err != io.EOF {
@@ -306,11 +331,26 @@ func (s *server) handleConn(conn net.Conn) {
 			}
 			return
 		}
-		if len(pkt) == 0 {
-			continue // heartbeat from client, nothing to forward
+		if len(pkt) == 1 && pkt[0] == framePing {
+			c.pings.Store(true)
+			// Not from this loop: a client that stops reading would stall it.
+			select {
+			case c.pong <- struct{}{}:
+			default:
+			}
+			continue
+		}
+		if !isFrom(pkt, ip) {
+			continue
 		}
 		c.schedule(&m.up, c.in, pkt)
 	}
+}
+
+// isFrom reports whether pkt is an IPv4 packet sent by ip, so clients can't
+// impersonate each other.
+func isFrom(pkt []byte, ip [4]byte) bool {
+	return len(pkt) >= 20 && pkt[0]>>4 == 4 && [4]byte(pkt[12:16]) == ip
 }
 
 func (s *server) writeTun(pkt []byte) error {
@@ -357,11 +397,19 @@ const (
 	lastClientIP  = 253
 )
 
-// allocateIP hands out addresses round-robin rather than lowest-free, so late
+// allocateIP gives a user their previous address if it is free, so their open
+// connections survive a reconnect. Otherwise it hands out addresses round-robin rather than lowest-free, so late
 // packets for a user who just left don't reach whoever connects next.
-func (s *server) allocateIP() ([4]byte, bool) {
+func (s *server) allocateIP(name string) ([4]byte, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.lastIP == nil {
+		s.lastIP = map[string]byte{}
+	}
+	if n, ok := s.lastIP[name]; ok && !s.usedIPs[n] {
+		s.usedIPs[n] = true
+		return [4]byte{s.subnet[0], s.subnet[1], s.subnet[2], n}, true
+	}
 	for range lastClientIP - firstClientIP + 1 {
 		n := s.nextIP
 		s.nextIP++
@@ -370,6 +418,7 @@ func (s *server) allocateIP() ([4]byte, bool) {
 		}
 		if !s.usedIPs[n] {
 			s.usedIPs[n] = true
+			s.lastIP[name] = n
 			return [4]byte{s.subnet[0], s.subnet[1], s.subnet[2], n}, true
 		}
 	}

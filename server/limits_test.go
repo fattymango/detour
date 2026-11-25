@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net"
@@ -66,6 +67,13 @@ func (f *fakeTun) Write(b []byte) (int, error) {
 
 func (f *fakeTun) Close() error { return nil }
 
+func claimAll(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if _, err := db.Exec("UPDATE users SET is_invite = 0"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type env struct {
 	t   *testing.T
 	s   *server
@@ -83,6 +91,7 @@ func newEnv(t *testing.T, users ...string) *env {
 			t.Fatal(err)
 		}
 	}
+	claimAll(t, db)
 	if err := setAdmin(db, "boss", true); err != nil {
 		t.Fatal(err)
 	}
@@ -241,11 +250,11 @@ func TestDownloadSpeedIsPerUser(t *testing.T) {
 func TestUploadSpeed(t *testing.T) {
 	e := newEnv(t, "slow")
 	e.set("slow", 2000, 0)
-	c, _ := e.vpn("slow")
+	c, ip := e.vpn("slow")
 	var offered atomic.Int64
 	var gentle atomic.Bool
 	go func() {
-		for writeFramed(c, make([]byte, 1000)) == nil {
+		for writeFramed(c, packetFrom(ip, 1000)) == nil {
 			offered.Add(1000)
 			if gentle.Load() {
 				time.Sleep(200 * time.Microsecond)
@@ -292,7 +301,7 @@ func TestQuota(t *testing.T) {
 	e.set("u", 0, 50_000)
 	c, ip := e.vpn("u")
 	for range 20 {
-		writeFramed(c, make([]byte, 1000))
+		writeFramed(c, packetFrom(ip, 1000))
 		e.tun.in <- packetTo(ip)
 	}
 	if n, cut := readFor(c, 500*time.Millisecond); n != 20_000 || cut {
@@ -326,19 +335,19 @@ func TestQuota(t *testing.T) {
 	if u := e.info("u"); u.UsedBytes != 0 {
 		t.Errorf("after reset: %+v", u)
 	}
-	c, _ = e.vpn("u")
+	c, ip = e.vpn("u")
 	sent := len(e.tun.out)
 	for range 100 {
-		writeFramed(c, make([]byte, 1000))
+		writeFramed(c, packetFrom(ip, 1000))
 	}
 	if _, cut := readFor(c, 3*time.Second); !cut || len(e.tun.out)-sent != 50 {
 		t.Errorf("upload limit: %d packets passed, cut=%v", len(e.tun.out)-sent, cut)
 	}
 
 	e.admin(adminRequest{Op: "resetusage", Username: "u"})
-	c, _ = e.vpn("u")
+	c, ip = e.vpn("u")
 	for range 20 {
-		writeFramed(c, make([]byte, 1000))
+		writeFramed(c, packetFrom(ip, 1000))
 	}
 	time.Sleep(200 * time.Millisecond)
 	e.set("u", 0, 10_000)
@@ -349,6 +358,7 @@ func TestQuota(t *testing.T) {
 	if err := addUser(e.s.userDB, "u", "pw"); err != nil {
 		t.Fatal(err)
 	}
+	claimAll(t, e.s.userDB)
 	if u := e.info("u"); u.UsedBytes != 0 || u.QuotaBytes != 0 {
 		t.Errorf("recreated user inherited limits: %+v", u)
 	}

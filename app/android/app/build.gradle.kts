@@ -1,7 +1,14 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// Release signing, kept outside the repository. See scripts/release.sh.
+val keyProperties = Properties().apply {
+    System.getenv("DETOUR_KEY_PROPERTIES")?.let { path -> file(path).inputStream().use { load(it) } }
 }
 
 android {
@@ -26,9 +33,18 @@ android {
         versionName = flutter.versionName
     }
 
+    if (!keyProperties.isEmpty) {
+        signingConfigs.create("release") {
+            storeFile = file(keyProperties.getProperty("storeFile"))
+            storePassword = keyProperties.getProperty("storePassword")
+            keyAlias = keyProperties.getProperty("keyAlias")
+            keyPassword = keyProperties.getProperty("keyPassword")
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (keyProperties.isEmpty) "debug" else "release")
         }
     }
 }

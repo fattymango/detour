@@ -105,7 +105,7 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 
   Future<void> _reset(String username) async {
-    if (!await _confirm('New link for $username?', 'Their current link stops working right away.', 'Create')) {
+    if (!await _confirm('New link for $username?', 'Their phone is disconnected, and they need the new link to get back in.', 'Create')) {
       return;
     }
     await _run(() async => _showInvite(username, await widget.vpn.resetServerUser(_server, username)));
@@ -176,7 +176,12 @@ class _UsersScreenState extends State<UsersScreen> {
                           children: [
                             Text([
                               if (user.isAdmin) 'Admin',
-                              if (user.connected > 0) 'Connected (${user.connected})' else 'Not connected',
+                              if (user.invitePending)
+                                'Invite not used yet'
+                              else if (user.connected > 0)
+                                'Connected (${user.connected})'
+                              else
+                                'Not connected',
                             ].join(' · ')),
                             Text([
                               user.quotaBytes > 0

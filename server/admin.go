@@ -19,6 +19,8 @@ const (
 
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,32}$`)
 
+var claimPattern = regexp.MustCompile(`^[A-Za-z0-9]{32,64}$`)
+
 func checkUsername(name string) error {
 	if !usernamePattern.MatchString(name) {
 		return errors.New("username must be 1-32 letters, digits, dots, dashes or underscores")
@@ -29,6 +31,7 @@ func checkUsername(name string) error {
 type adminRequest struct {
 	Op       string `json:"op"`
 	Username string `json:"username"`
+	Password string `json:"password"` // for claim
 
 	// For setlimits; 0 means unlimited.
 	SpeedKbps  int64 `json:"speedKbps"`
@@ -38,6 +41,7 @@ type adminRequest struct {
 type adminUser struct {
 	Username  string `json:"username"`
 	Admin     bool   `json:"admin"`
+	Invite    bool   `json:"invite"`
 	Connected int    `json:"connected"`
 
 	SpeedKbps  int64 `json:"speedKbps"`
@@ -49,6 +53,7 @@ type adminResponse struct {
 	Error    string      `json:"error,omitempty"`
 	Users    []adminUser `json:"users,omitempty"`
 	Password string      `json:"password,omitempty"`
+	Claimed  bool        `json:"claimed,omitempty"`
 }
 
 // handleAdmin serves one request on an already authenticated connection:
@@ -73,6 +78,12 @@ func (s *server) handleAdmin(conn net.Conn, r *bufio.Reader, u user) {
 }
 
 func (s *server) runAdmin(u user, req adminRequest) (resp adminResponse, err error) {
+	if req.Op == "claim" {
+		return s.claim(u, req.Password)
+	}
+	if u.invite {
+		return resp, errors.New("this invite hasn't been claimed")
+	}
 	if !u.admin {
 		return resp, errors.New("you are not an admin of this server")
 	}
@@ -92,7 +103,7 @@ func (s *server) runAdmin(u user, req adminRequest) (resp adminResponse, err err
 		}
 		s.mu.Unlock()
 		for _, u := range users {
-			resp.Users = append(resp.Users, adminUser{u.name, u.admin, connected[u.name], u.speedKbps, u.quotaBytes, u.usedBytes})
+			resp.Users = append(resp.Users, adminUser{u.name, u.admin, u.invite, connected[u.name], u.speedKbps, u.quotaBytes, u.usedBytes})
 		}
 		return resp, nil
 	case "add":
@@ -127,6 +138,23 @@ func (s *server) runAdmin(u user, req adminRequest) (resp adminResponse, err err
 	return resp, nil
 }
 
+// claim turns an invite into this device's own login. Claiming again is
+// harmless, so a client that missed the answer can check with its new password.
+func (s *server) claim(u user, password string) (resp adminResponse, err error) {
+	if !u.invite {
+		return resp, nil
+	}
+	if !claimPattern.MatchString(password) {
+		return resp, errors.New("bad new password")
+	}
+	if err := claimInvite(s.userDB, u, password); err != nil {
+		return resp, errors.New("this invite link was already used or cancelled")
+	}
+	log.Printf("user %q claimed their invite", u.name)
+	resp.Claimed = true
+	return resp, nil
+}
+
 // applyUsers brings running connections in line with the database: it updates
 // limits, and disconnects removed users, changed passwords and used-up quotas.
 // Callers hold syncMu.
@@ -147,6 +175,7 @@ func (s *server) applyUsers() {
 			m.load(u)
 		} else {
 			delete(s.meters, name)
+			delete(s.lastIP, name)
 		}
 	}
 	for _, c := range s.clients {

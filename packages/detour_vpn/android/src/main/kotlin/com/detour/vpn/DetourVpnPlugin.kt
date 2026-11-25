@@ -1,10 +1,13 @@
 package com.detour.vpn
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.VpnService
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -31,20 +34,24 @@ class DetourVpnPlugin :
     MethodChannel.MethodCallHandler,
     EventChannel.StreamHandler,
     ActivityAware,
-    PluginRegistry.ActivityResultListener {
+    PluginRegistry.ActivityResultListener,
+    PluginRegistry.RequestPermissionsResultListener {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var appContext: Context
     private lateinit var configStore: ConfigStore
+    private lateinit var idleStop: IdleStop
     private var methodChannel: MethodChannel? = null
     private var eventChannel: EventChannel? = null
     private var eventSink: EventChannel.EventSink? = null
     private var activity: Activity? = null
+    private var pendingNotificationResult: MethodChannel.Result? = null
     private var pendingPermissionResult: ((Boolean) -> Unit)? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
         configStore = ConfigStore(appContext)
+        idleStop = IdleStop(appContext)
         VpnLogStore.init(appContext)
         VpnWidgetProvider.refreshAll(appContext)
         TunnelVpnService.stateListener = { name, state ->
@@ -71,6 +78,7 @@ class DetourVpnPlugin :
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
         activity = binding.activity
         binding.addActivityResultListener(this)
+        binding.addRequestPermissionsResultListener(this)
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
@@ -80,6 +88,7 @@ class DetourVpnPlugin :
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
         activity = binding.activity
         binding.addActivityResultListener(this)
+        binding.addRequestPermissionsResultListener(this)
     }
 
     override fun onDetachedFromActivity() {
@@ -91,6 +100,13 @@ class DetourVpnPlugin :
         val granted = resultCode == Activity.RESULT_OK
         pendingPermissionResult?.invoke(granted)
         pendingPermissionResult = null
+        return true
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray): Boolean {
+        if (requestCode != NOTIFICATION_PERMISSION_REQUEST_CODE) return false
+        pendingNotificationResult?.success(grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED)
+        pendingNotificationResult = null
         return true
     }
 
@@ -128,14 +144,30 @@ class DetourVpnPlugin :
                 }
             }
 
+            "requestNotificationPermission" -> {
+                val host = activity
+                val needed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    appContext.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                if (!needed || host == null || pendingNotificationResult != null) {
+                    result.success(!needed)
+                } else {
+                    pendingNotificationResult = result
+                    host.requestPermissions(
+                        arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST_CODE,
+                    )
+                }
+            }
+
             "importConfig" -> {
                 val name = args["name"] as String
                 val text = args["text"] as String
-                try {
-                    configStore.importConfig(name, text)
-                    result.success(null)
-                } catch (e: ConfigParseException) {
-                    result.error("bad_config", e.message ?: "Invalid tunnel config", null)
+                thread {
+                    try {
+                        configStore.importConfig(name, text, ::claimInvite)
+                        mainHandler.post { result.success(null) }
+                    } catch (e: Exception) {
+                        mainHandler.post { result.error("bad_config", e.message ?: "Couldn't add this server", null) }
+                    }
                 }
             }
 
@@ -158,7 +190,8 @@ class DetourVpnPlugin :
 
             "listConfigs" -> {
                 try {
-                    result.success(configStore.listNames().map { configStore.toMap(it) })
+                    // Skips configs this device can't decrypt, which can only be added again.
+                    result.success(configStore.listNames().mapNotNull { name -> runCatching { configStore.toMap(name) }.getOrNull() })
                 } catch (e: Exception) {
                     result.error("list_failed", e.message, null)
                 }
@@ -170,8 +203,12 @@ class DetourVpnPlugin :
             }
 
             "renameConfig" -> {
-                configStore.renameConfig(args["oldName"] as String, args["newName"] as String)
-                result.success(null)
+                try {
+                    configStore.renameConfig(args["oldName"] as String, args["newName"] as String)
+                    result.success(null)
+                } catch (e: ConfigParseException) {
+                    result.error("bad_name", e.message, null)
+                }
             }
 
             "setIncludedApps" -> {
@@ -182,7 +219,7 @@ class DetourVpnPlugin :
                     // If this config is the one currently connected, re-establish the
                     // tunnel immediately so the new app selection takes effect live
                     // instead of only on the next manual connect.
-                    if (TunnelVpnService.currentState == "UP" && TunnelVpnService.currentConfigName == name) {
+                    if (TunnelVpnService.currentState in listOf("UP", "STANDBY") && TunnelVpnService.currentConfigName == name) {
                         val intent = Intent(appContext, TunnelVpnService::class.java)
                             .setAction(TunnelVpnService.ACTION_CONNECT)
                             .putExtra(TunnelVpnService.EXTRA_CONFIG_NAME, name)
@@ -213,6 +250,7 @@ class DetourVpnPlugin :
                                 mapOf(
                                     "username" to u.getString("username"),
                                     "admin" to u.getBoolean("admin"),
+                                    "invite" to u.optBoolean("invite"),
                                     "connected" to u.getInt("connected"),
                                     "speedKbps" to u.optLong("speedKbps"),
                                     "quotaBytes" to u.optLong("quotaBytes"),
@@ -267,6 +305,31 @@ class DetourVpnPlugin :
                 )
             }
 
+            "getIdleAction" -> result.success(if (idleStop.hasUsageAccess()) idleStop.action else IdleStop.OFF)
+
+            "setIdleAction" -> {
+                idleStop.action = args["action"] as String
+                recheckIdle()
+                result.success(null)
+            }
+
+            "getIdleMinutes" -> result.success(idleStop.minutes)
+
+            "setIdleMinutes" -> {
+                idleStop.minutes = args["minutes"] as Int
+                recheckIdle()
+                result.success(null)
+            }
+
+            "hasUsageAccess" -> result.success(idleStop.hasUsageAccess())
+
+            "requestUsageAccess" -> {
+                appContext.startActivity(
+                    Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+                result.success(null)
+            }
+
             "hasBatteryExemption" -> {
                 val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
                 result.success(powerManager.isIgnoringBatteryOptimizations(appContext.packageName))
@@ -285,9 +348,16 @@ class DetourVpnPlugin :
         }
     }
 
+    /** Lets a running VPN reschedule its next check. */
+    private fun recheckIdle() {
+        if (TunnelVpnService.currentState == "DOWN") return
+        appContext.startService(Intent(appContext, TunnelVpnService::class.java).setAction(TunnelVpnService.ACTION_ALARM))
+    }
+
     private companion object {
         const val METHOD_CHANNEL = "detour_vpn/vpn"
         const val EVENT_CHANNEL = "detour_vpn/vpn/state"
         const val VPN_PERMISSION_REQUEST_CODE = 5100
+        const val NOTIFICATION_PERMISSION_REQUEST_CODE = 5101
     }
 }

@@ -23,6 +23,7 @@ func TestAdmin(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	claimAll(t, db)
 	if err := setAdmin(db, "boss", true); err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +119,10 @@ func TestAdmin(t *testing.T) {
 		}
 	}
 
+	if _, status := open("", "ali", r.Password); status != 4 {
+		t.Errorf("unclaimed invite login: status %d", status)
+	}
+	claimAll(t, db)
 	ali, status := vpn("ali", r.Password)
 	plain, _ := vpn("plain", "pw")
 	if status != 0 {
@@ -137,6 +142,10 @@ func TestAdmin(t *testing.T) {
 	if _, status := open("", "ali", r.Password); status != 1 {
 		t.Error("old password still works after reset")
 	}
+	if _, status := open("", "ali", reset.Password); status != 4 {
+		t.Errorf("reset password must need claiming: status %d", status)
+	}
+	claimAll(t, db)
 	ali, status = vpn("ali", reset.Password)
 	if status != 0 {
 		t.Fatal("new password rejected")
@@ -193,7 +202,7 @@ func TestMigrateOldDB(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if u, ok := lookupUser(db, "phone"); !ok || u.hash != "h" || u.admin {
+		if u, ok := lookupUser(db, "phone"); !ok || u.hash != "h" || u.admin || u.invite {
 			t.Fatalf("got %+v %v", u, ok)
 		}
 		db.Close()

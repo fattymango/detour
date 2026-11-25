@@ -1,4 +1,4 @@
-enum TunnelState { disconnected, connecting, connected, disconnecting, reconnecting, error }
+enum TunnelState { disconnected, connecting, connected, disconnecting, reconnecting, standby, error }
 
 class TunnelStatus {
   const TunnelStatus({
@@ -16,6 +16,7 @@ class TunnelStatus {
       'UP' => TunnelState.connected,
       'DOWN' => TunnelState.disconnected,
       'CONNECTING' => TunnelState.connecting,
+      'STANDBY' => TunnelState.standby,
       'RECONNECTING' => TunnelState.reconnecting,
       _ when rawState.startsWith('ERROR') => TunnelState.error,
       _ => TunnelState.disconnected,

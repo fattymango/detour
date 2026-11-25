@@ -16,16 +16,19 @@ type user struct {
 	hash  string
 	admin bool
 
+	// The password is from an invite link, and only good for claiming it.
+	invite bool
+
 	// 0 means unlimited.
 	speedKbps  int64
 	quotaBytes int64
 	usedBytes  int64
 }
 
-const userColumns = "username, password_hash, is_admin, speed_kbps, quota_bytes, used_bytes"
+const userColumns = "username, password_hash, is_admin, is_invite, speed_kbps, quota_bytes, used_bytes"
 
 func scanUser(row interface{ Scan(...any) error }) (u user, err error) {
-	err = row.Scan(&u.name, &u.hash, &u.admin, &u.speedKbps, &u.quotaBytes, &u.usedBytes)
+	err = row.Scan(&u.name, &u.hash, &u.admin, &u.invite, &u.speedKbps, &u.quotaBytes, &u.usedBytes)
 	return u, err
 }
 
@@ -50,7 +53,7 @@ func migrate(db *sql.DB) error {
 	)`); err != nil {
 		return err
 	}
-	for _, column := range []string{"is_admin", "speed_kbps", "quota_bytes", "used_bytes"} {
+	for _, column := range []string{"is_admin", "is_invite", "speed_kbps", "quota_bytes", "used_bytes"} {
 		var exists bool
 		if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = ?", column).Scan(&exists); err != nil {
 			return err
@@ -87,13 +90,14 @@ func listUsers(db *sql.DB) ([]user, error) {
 	return users, rows.Err()
 }
 
-// addUser fails if the user already exists.
+// addUser creates a user whose password must be claimed. It fails if the user
+// already exists.
 func addUser(db *sql.DB, name, password string) error {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
-	res, err := db.Exec("INSERT INTO users (username, password_hash) VALUES (?, ?) ON CONFLICT(username) DO NOTHING", name, string(hash))
+	res, err := db.Exec("INSERT INTO users (username, password_hash, is_invite) VALUES (?, ?, 1) ON CONFLICT(username) DO NOTHING", name, string(hash))
 	if err != nil {
 		return err
 	}
@@ -103,12 +107,26 @@ func addUser(db *sql.DB, name, password string) error {
 	return nil
 }
 
+// setPassword replaces the password with one that must be claimed.
 func setPassword(db *sql.DB, name, password string) error {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
-	return mustAffect(db.Exec("UPDATE users SET password_hash = ? WHERE username = ?", string(hash), name))
+	return mustAffect(db.Exec("UPDATE users SET password_hash = ?, is_invite = 1 WHERE username = ?", string(hash), name))
+}
+
+// claimInvite swaps the invite's password for one only the claiming device
+// knows. Only one of several simultaneous claims succeeds.
+func claimInvite(db *sql.DB, u user, password string) error {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	return mustAffect(db.Exec(
+		"UPDATE users SET password_hash = ?, is_invite = 0 WHERE username = ? AND password_hash = ? AND is_invite = 1",
+		string(hash), u.name, u.hash,
+	))
 }
 
 func setAdmin(db *sql.DB, name string, admin bool) error {

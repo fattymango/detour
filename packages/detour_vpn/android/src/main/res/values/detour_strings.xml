@@ -3,5 +3,6 @@
     <string name="detour_widget_label">VPN toggle</string>
     <string name="detour_widget_connected">VPN connected, tap to disconnect</string>
     <string name="detour_widget_connecting">VPN connecting, tap to cancel</string>
+    <string name="detour_widget_standby">VPN on standby, tap to turn off</string>
     <string name="detour_widget_disconnected">VPN disconnected, tap to connect</string>
 </resources>

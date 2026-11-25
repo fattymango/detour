@@ -45,7 +45,7 @@ func runUserCommand(cmd string, args []string) {
 		if err != nil {
 			log.Fatalf("saving user: %v", err)
 		}
-		fmt.Printf("user %q added/updated\nusername: %s\npassword: %s\n", name, name, password)
+		fmt.Printf("user %q added/updated\nusername: %s\none-time password: %s\n", name, name, password)
 
 	case "deluser":
 		if len(rest) < 1 {

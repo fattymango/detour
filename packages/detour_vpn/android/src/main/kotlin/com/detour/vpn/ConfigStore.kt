@@ -1,9 +1,13 @@
 package com.detour.vpn
 
 import android.content.Context
+import android.util.Log
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.security.SecureRandom
 import java.util.Base64
 
 /** A saved server profile for the simpletun TLS tunnel. */
@@ -127,14 +131,13 @@ internal fun serializeConfig(config: TunnelConfig): String {
     return sb.toString()
 }
 
-/**
- * Persists tunnel profiles as simple `key: value` text files (one per config,
- * named `<name>.conf`) under the app's private storage. Deliberately not
- * reusing any VPN-protocol config format - this is a bespoke, minimal
- * client/server pair, so the config format is bespoke too.
- */
-class ConfigStore(context: Context) {
-    private val dir = File(context.filesDir, "tunnel_configs").apply { mkdirs() }
+/** Persists tunnel profiles, one encrypted file each, in the app's private storage. */
+class ConfigStore internal constructor(private val dir: File, private val cipher: ConfigCipher) {
+    constructor(context: Context) : this(File(context.filesDir, "tunnel_configs"), KeystoreCipher)
+
+    init {
+        dir.mkdirs()
+    }
 
     // Names become file names.
     private fun checkName(name: String) {
@@ -145,11 +148,37 @@ class ConfigStore(context: Context) {
 
     private fun fileFor(name: String) = File(dir, "$name.conf")
 
-    @Throws(ConfigParseException::class)
-    fun importConfig(name: String, text: String) {
+    private fun write(name: String, sealed: String) {
+        // A crash halfway must not lose a config: its invite can't be used again.
+        val temp = File(dir, ".$name.tmp")
+        FileOutputStream(temp).use {
+            it.write(sealed.toByteArray(Charsets.UTF_8))
+            it.fd.sync()
+        }
+        if (!temp.renameTo(fileFor(name))) throw IOException("Couldn't save the config")
+    }
+
+    private fun seal(config: TunnelConfig): String {
+        val text = serializeConfig(config)
+        val sealed = cipher.encrypt(text)
+        check(cipher.decrypt(sealed) == text) { "This device can't store the config safely" }
+        return sealed
+    }
+
+    /**
+     * Saves the config in [text]. If it's an unused invite, [claim] must swap
+     * its password for the new one on the server, returning false if the
+     * server says there is nothing to claim.
+     */
+    @Synchronized
+    fun importConfig(name: String, text: String, claim: (TunnelConfig, newPassword: String) -> Boolean) {
         val config = parseConfig(text)
         checkName(name)
-        fileFor(name).writeText(serializeConfig(config))
+        val claimed = config.copy(password = newPassword())
+        // Sealed first, so a storage problem can't use up the invite.
+        val sealedClaimed = seal(claimed)
+        val sealedAsIs = seal(config)
+        write(name, if (claim(config, claimed.password)) sealedClaimed else sealedAsIs)
     }
 
     fun listNames(): List<String> {
@@ -159,33 +188,52 @@ class ConfigStore(context: Context) {
             ?: emptyList()
     }
 
+    @Synchronized
     @Throws(ConfigParseException::class)
     fun loadConfig(name: String): TunnelConfig {
         val file = fileFor(name)
         require(file.exists()) { "No such config: $name" }
-        return parseConfig(file.readText()).copy(name = name)
+        val stored = file.readText()
+        if (stored.startsWith(ENCRYPTED_PREFIX)) {
+            val text = try {
+                cipher.decrypt(stored)
+            } catch (e: Exception) {
+                throw ConfigParseException("This server can't be opened on this device, add it again")
+            }
+            return parseConfig(text).copy(name = name)
+        }
+        // Saved by a version that didn't encrypt.
+        val config = parseConfig(stored).copy(name = name)
+        try {
+            write(name, seal(config))
+        } catch (e: Exception) {
+            Log.w("ConfigStore", "Couldn't encrypt an old config, will retry", e)
+        }
+        return config
     }
 
     fun deleteConfig(name: String) {
         fileFor(name).delete()
     }
 
+    @Synchronized
     fun renameConfig(oldName: String, newName: String) {
         checkName(newName)
         val from = fileFor(oldName)
         require(from.exists()) { "No such config: $oldName" }
-        from.copyTo(fileFor(newName), overwrite = true)
-        from.delete()
+        if (oldName == newName) return
+        if (fileFor(newName).exists()) throw ConfigParseException("You already have a server with this name")
+        if (!from.renameTo(fileFor(newName))) throw IOException("Couldn't rename")
     }
 
     /** Link for another [username] on the same server, ready to import. */
     fun configLinkFor(name: String, username: String, password: String): String =
         configLink(loadConfig(name).copy(username = username, password = password, includedApplications = emptyList()))
 
+    @Synchronized
     @Throws(ConfigParseException::class)
     fun setIncludedApps(name: String, packages: List<String>) {
-        val existing = loadConfig(name)
-        fileFor(name).writeText(serializeConfig(existing.copy(includedApplications = packages)))
+        write(name, seal(loadConfig(name).copy(includedApplications = packages)))
     }
 
     fun toMap(name: String): Map<String, Any?> {
@@ -197,5 +245,14 @@ class ConfigStore(context: Context) {
             "endpointHost" to config.host,
             "endpointPort" to config.port,
         )
+    }
+
+    private fun newPassword(): String {
+        val random = SecureRandom()
+        return String(CharArray(32) { PASSWORD_CHARS[random.nextInt(PASSWORD_CHARS.length)] })
+    }
+
+    private companion object {
+        const val PASSWORD_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
     }
 }

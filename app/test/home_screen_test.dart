@@ -14,6 +14,8 @@ void main() {
             for (final n in ['mine', 'other', 'down'])
               {'name': n, 'includedApplications': <String>[], 'endpointHost': 'h', 'endpointPort': 443},
           ];
+        case 'hasBatteryExemption':
+          return false;
         case 'adminRequest':
           final name = (call.arguments as Map)['name'];
           if (name == 'mine') return {'users': <Object>[], 'config': null};
@@ -24,10 +26,17 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
     await tester.pumpAndSettle();
 
+    expect(find.textContaining('save battery'), findsOneWidget);
+    await tester.tap(find.text('Not now'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('save battery'), findsNothing);
+
     for (final (i, visible) in [true, false, false].indexed) {
       await tester.tap(find.byType(PopupMenuButton<String>).at(i));
       await tester.pumpAndSettle();
       expect(find.text('Select apps'), findsOneWidget);
+      expect(find.text('Rename'), findsOneWidget);
+      expect(find.text('Check latency'), findsOneWidget);
       expect(find.text('Manage users'), visible ? findsOneWidget : findsNothing);
       await tester.tapAt(Offset.zero);
       await tester.pumpAndSettle();

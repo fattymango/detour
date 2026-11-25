@@ -13,15 +13,19 @@ WireGuard and OpenVPN both work fine in general, but some networks block WireGua
 3. Server checks the username/password (bcrypt) against its own user database. Response: `1 byte status` (0=ok, others under "Admin protocol"), and if ok, `4 bytes` assigned IPv4 address.
 4. From then on, both directions relay length-prefixed raw IP packets (`2-byte big-endian length | packet bytes`) between the client's local TUN device and the server's shared TUN device, NAT'd out to the internet.
 
+A 1-byte frame is never an IP packet. `1` from the client is a ping, and the server answers `2`. Once a client has pinged, the server sends nothing unasked; other clients get an empty frame every 15 seconds and must send one at least every 40.
+
 No CA, no domain: the server's certificate is self-signed with the server's IP as the Subject Alternative Name. The client pins the certificate's exact SHA-256 fingerprint instead of validating a certificate chain — same trust model as WireGuard pinning a public key, applied to TLS.
 
 ## Install
 
 You need a Linux server with a public IPv4 address, root access, `openssl` and `nftables`. Port 443 must be free, and open to TCP from anywhere. If your provider has its own firewall (such as AWS security groups), open it there too, and allow whatever outbound ports you want VPN users to have.
 
-### 1. Build the program
+### 1. Get the program
 
-On any computer with [Go](https://go.dev/dl/), in this folder. Use `GOARCH=arm64` for ARM servers:
+Download `detour-server-linux-amd64` (or `-arm64` for ARM servers) from [Releases](https://github.com/fattymango/detour/releases), and copy it to `/tmp/detour-server` on the server.
+
+Or build it, on any computer with [Go](https://go.dev/dl/), in this folder:
 
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o detour-server .
@@ -115,6 +119,8 @@ It creates and configures its own `tun0` interface. Check it with `systemctl sta
 
 ### 5. Create your admin and get their invite link
 
+The password is one-time: the first phone to add the link swaps it for its own secret.
+
 ```bash
 PASSWORD=$(openssl rand -hex 16)
 sudo detour-server adduser admin "$PASSWORD"
@@ -123,14 +129,14 @@ FINGERPRINT=$(sudo openssl x509 -in /etc/detour/server.crt -noout -fingerprint -
 echo "detour://admin:$PASSWORD@$SERVER_IP:443/$FINGERPRINT?name=myserver"
 ```
 
-Copy the `detour://` line to your phone privately (it contains the password). In the app, tap **+**, then **Paste**, then **Add**. Choose your apps under **⋮ → Select apps** before connecting: with none selected, every app uses the VPN.
+Copy the `detour://` line to your phone privately (whoever adds it first becomes admin). In the app, tap **+**, then **Paste**, then **Add**. Choose your apps under **⋮ → Select apps** before connecting: with none selected, every app uses the VPN.
 
 From then on, invite everyone else from the app under **⋮ → Manage users**.
 
 ## Managing users
 
 ```bash
-detour-server adduser <username> [password]   # omit password to auto-generate one
+detour-server adduser <username> [password]   # one-time password, generated if omitted
 detour-server deluser <username>
 detour-server setadmin <username> on|off
 detour-server listusers
@@ -140,21 +146,26 @@ All of them, and `serve`, use `/var/lib/detour/users.db`. To use another file, p
 
 Every server is independent: it has its own users and its own admins. Make the first admin with `setadmin` on the server. Admins can then add, reset and remove that server's users from the app (**⋮ → Manage users**), but only the CLI can make or unmake admins.
 
+Every new user, and every reset one, starts as an unclaimed invite. Adding its link in the app claims it: the app replaces the password with a random one that only that phone knows, so the link works once. A user who changes phones needs a new link.
+
 Removing a user or changing their password disconnects them: right away from the app, within 5 seconds from the CLI.
 
 Admins can also give each user a speed limit (each way, shared by all their devices) and a total data allowance (upload plus download, counted until an admin resets it). The server enforces both: packets over the speed are dropped, and a user who runs out is disconnected and refused. Usage is saved every 5 seconds, so a restart can lose that much.
 
 ## Admin protocol
 
-An admin client sends a `0` byte before the normal auth frame. After status `0` it sends one framed JSON request (`{"op": "list"|"add"|"reset"|"remove"|"setlimits"|"resetusage", "username": "...", "speedKbps": 0, "quotaBytes": 0}`) and gets one line of JSON back, with `error` set on failure.
+An admin client sends a `0` byte before the normal auth frame. After status `0` it sends one framed JSON request (`{"op": "list"|"add"|"reset"|"remove"|"setlimits"|"resetusage"|"claim", "username": "...", "password": "...", "speedKbps": 0, "quotaBytes": 0}`) and gets one line of JSON back, with `error` set on failure.
 
-Login status bytes: `0` ok, `1` access denied, `2` no free addresses, `3` data limit reached.
+Login status bytes: `0` ok, `1` access denied, `2` no free addresses, `3` data limit reached, `4` unclaimed invite.
+
+Any user may `claim`, which swaps an unclaimed invite's password for `password` (32-64 letters and digits) and answers `"claimed": true`. Everything else needs an admin, and `add` and `reset` answer with the one-time `password`.
 
 ## Notes / limitations
 
 - No traffic logging by design. Logs show only connection lifecycle events (connect/disconnect/auth failure), never packet contents.
 - Up to 252 clients at once. An address is freed when its client disconnects, or about 40 seconds after a connection dies silently.
 - Logins must finish within 10 seconds. Each source IP (IPv6: each /64) gets 8 logins in progress and 10 wrong passwords per 5 minutes, with 128 logins in progress overall. People sharing one public IP share that limit; restarting the server clears it.
-- IPv4 only.
-- The same invite link works on several devices at once.
+- IPv4 only. Clients can only send from the address they were given.
+- An app that pings gets no unasked-for traffic, and may stay silent for 30 minutes.
+- Users from before one-time invites keep their old login until you give them a new link.
 - Single shared TUN device for all clients; the server dispatches packets to the right client by destination IP against a small in-memory map.

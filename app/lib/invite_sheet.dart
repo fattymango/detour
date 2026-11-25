@@ -76,8 +76,8 @@ class _InviteSheetState extends State<InviteSheet> {
           ),
           const SizedBox(height: 12),
           Text(
-            'Anyone with this link can connect as ${widget.username}, so send it privately. '
-            'It is shown only once; you can make a new one later.',
+            'The first phone to add this link becomes ${widget.username}, and then it stops working. '
+            'Send it privately. It is shown only once; you can make a new one later.',
             textAlign: TextAlign.center,
             style: theme.textTheme.bodySmall,
           ),

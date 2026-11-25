@@ -19,6 +19,7 @@ class _ImportDialogState extends State<ImportDialog> {
   String? _nameError;
   String? _textError;
   TunnelConfig? _preview;
+  bool _busy = false;
   String _suggested = '';
 
   @override
@@ -73,66 +74,74 @@ class _ImportDialogState extends State<ImportDialog> {
       _nameError = name.isEmpty
           ? 'Enter a name'
           : widget.existingNames.contains(name)
-              ? 'You already have a server with this name'
-              : null;
+          ? 'You already have a server with this name'
+          : null;
       _textError = null;
     });
     if (_nameError != null) return;
+    setState(() => _busy = true);
     try {
       await widget.vpn.importConfig(name: name, text: _text.text);
-      if (mounted) Navigator.pop(context, true);
+      // PopScope blocks closing while busy.
+      if (mounted) {
+        setState(() => _busy = false);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) Navigator.pop(context, true);
+        });
+      }
+      return;
     } on VpnRepositoryException catch (e) {
       if (mounted) setState(() => _textError = e.message);
     }
+    if (mounted) setState(() => _busy = false);
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      scrollable: true,
-      title: const Text('Add server'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _text,
-            minLines: 2,
-            maxLines: 4,
-            textDirection: TextDirection.ltr,
-            autocorrect: false,
-            enableSuggestions: false,
-            onChanged: (_) => _updatePreview(),
-            decoration: InputDecoration(
-              labelText: 'Invite link',
-              hintText: 'detour://...',
-              errorText: _textError,
-              errorMaxLines: 3,
-              border: const OutlineInputBorder(),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.content_paste),
-                tooltip: 'Paste',
-                onPressed: _paste,
+    return PopScope(
+      canPop: !_busy,
+      child: AlertDialog(
+        scrollable: true,
+        title: const Text('Add server'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _text,
+              minLines: 2,
+              maxLines: 4,
+              textDirection: TextDirection.ltr,
+              autocorrect: false,
+              enableSuggestions: false,
+              onChanged: (_) => _updatePreview(),
+              decoration: InputDecoration(
+                labelText: 'Invite link',
+                hintText: 'detour://...',
+                errorText: _textError,
+                errorMaxLines: 3,
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(icon: const Icon(Icons.content_paste), tooltip: 'Paste', onPressed: _paste),
               ),
             ),
-          ),
-          if (_preview case final preview?)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.check_circle, color: Theme.of(context).colorScheme.primary),
-              title: Text('${preview.endpointHost}:${preview.endpointPort}'),
-              subtitle: Text('User: ${preview.username}'),
+            if (_preview case final preview?)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.check_circle, color: Theme.of(context).colorScheme.primary),
+                title: Text('${preview.endpointHost}:${preview.endpointPort}'),
+                subtitle: Text('User: ${preview.username}'),
+              ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _name,
+              decoration: InputDecoration(labelText: 'Name', errorText: _nameError, errorMaxLines: 3),
             ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _name,
-            decoration: InputDecoration(labelText: 'Name', errorText: _nameError, errorMaxLines: 3),
-          ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: _busy ? null : () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: _busy ? null : _import, child: Text(_busy ? 'Adding...' : 'Add')),
         ],
       ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-        FilledButton(onPressed: _import, child: const Text('Add')),
-      ],
     );
   }
 }

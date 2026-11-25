@@ -27,6 +27,10 @@ class VpnChannel {
     return await _methodChannel.invokeMethod<bool>('requestVpnPermission') ?? false;
   }
 
+  Future<bool> requestNotificationPermission() async {
+    return await _methodChannel.invokeMethod<bool>('requestNotificationPermission') ?? false;
+  }
+
   Future<void> importConfig({required String name, required String text}) {
     return _methodChannel.invokeMethod('importConfig', {'name': name, 'text': text});
   }
@@ -90,6 +94,30 @@ class VpnChannel {
   Future<List<Map<dynamic, dynamic>>> getVpnLogs() async {
     final result = await _methodChannel.invokeMethod<List<dynamic>>('getVpnLogs');
     return (result ?? const []).cast<Map<dynamic, dynamic>>();
+  }
+
+  Future<String> getIdleAction() async {
+    return await _methodChannel.invokeMethod<String>('getIdleAction') ?? 'off';
+  }
+
+  Future<void> setIdleAction(String action) {
+    return _methodChannel.invokeMethod('setIdleAction', {'action': action});
+  }
+
+  Future<int> getIdleMinutes() async {
+    return await _methodChannel.invokeMethod<int>('getIdleMinutes') ?? 5;
+  }
+
+  Future<void> setIdleMinutes(int minutes) {
+    return _methodChannel.invokeMethod('setIdleMinutes', {'minutes': minutes});
+  }
+
+  Future<bool> hasUsageAccess() async {
+    return await _methodChannel.invokeMethod<bool>('hasUsageAccess') ?? false;
+  }
+
+  Future<void> requestUsageAccess() {
+    return _methodChannel.invokeMethod('requestUsageAccess');
   }
 
   Future<bool> hasBatteryExemption() async {

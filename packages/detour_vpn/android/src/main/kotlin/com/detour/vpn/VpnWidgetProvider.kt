@@ -55,6 +55,7 @@ class VpnWidgetProvider : AppWidgetProvider() {
                 "UP" -> R.drawable.detour_widget_bg_connected to R.string.detour_widget_connected
                 "CONNECTING", "RECONNECTING" ->
                     R.drawable.detour_widget_bg_connecting to R.string.detour_widget_connecting
+                "STANDBY" -> R.drawable.detour_widget_bg_standby to R.string.detour_widget_standby
                 else -> R.drawable.detour_widget_bg_disconnected to R.string.detour_widget_disconnected
             }
             val views = RemoteViews(context.packageName, R.layout.detour_vpn_widget)

@@ -3,7 +3,9 @@
 A self-hosted, split-tunnel VPN: run `detour-server` on your own box, connect your phone to it, and pick exactly which apps route through it. Built because WireGuard gets blocked by some networks' DPI and OpenVPN has no clean embeddable Android library — Detour disguises its traffic as plain TLS on port 443.
 
 - **Per-app tunneling** — only the apps you choose use the VPN; everything else bypasses it at the OS level.
-- **Only runs while connected** — one background service, with a wake lock and a small heartbeat every 15 seconds to keep the connection alive.
+- **Light on battery** — sleeps until there is traffic, with a brief check every few minutes instead of constant heartbeats.
+- **Rests when not in use** — after a time you choose, it can turn off, or go on standby and reconnect when you open one of its apps.
+- **One-time invites** — a link works for the first phone that adds it, and logins are stored encrypted.
 - **Home-screen widget** — connect and disconnect with one tap.
 - **Per-user limits** — admins set each user's speed and total data in the app; the server enforces them.
 - **No central service, no accounts with a third party** — you run the server, you own the user list.
@@ -21,16 +23,11 @@ Everything is designed to be used independently: `detour-server` is a single Go 
 ## Quick start
 
 1. **Server**: follow [`server/README.md`](server/README.md). It ends with an invite link for your admin account.
-2. **App** (Android 8 or newer): install [Flutter](https://docs.flutter.dev/get-started/install), connect your phone with USB debugging on, and run:
-   ```bash
-   cd app
-   flutter pub get
-   flutter run
-   ```
+2. **App** (Android 8 or newer): install the APK from [Releases](https://github.com/fattymango/detour/releases), usually `detour-android-arm64-v8a.apk`. Or build it with [Flutter](https://docs.flutter.dev/get-started/install): `cd app && flutter run`.
 3. In the app, tap **+**, paste the invite link, and tap **Add**. Pick your apps under **⋮ → Select apps**, then tap the server to connect.
 4. Invite other people under **⋮ → Manage users**.
 
-There are no prebuilt downloads yet. Building your own app? Use the [`detour_vpn`](packages/detour_vpn/README.md) package.
+Maintainers build the downloads with [`scripts/release.sh`](scripts/release.sh). Building your own app? Use the [`detour_vpn`](packages/detour_vpn/README.md) package.
 
 ## How it works
 

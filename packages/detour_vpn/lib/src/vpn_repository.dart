@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 
 import 'vpn_channel.dart';
+import 'models/idle_action.dart';
 import 'models/server_user.dart';
 import 'models/tunnel_config.dart';
 import 'models/tunnel_status.dart';
@@ -27,6 +28,11 @@ class VpnRepository {
 
   Future<bool> requestVpnPermission() => _channel.requestVpnPermission();
 
+  /// Lets the connection notification show, on Android versions that ask.
+  Future<bool> requestNotificationPermission() => _channel.requestNotificationPermission();
+
+  /// Saves a config, encrypted on this device. An invite link is claimed on its
+  /// server first, so it needs a connection and works only once.
   Future<void> importConfig({required String name, required String text}) async {
     try {
       await _channel.importConfig(name: name, text: text);
@@ -52,8 +58,13 @@ class VpnRepository {
 
   Future<void> deleteConfig(String name) => _channel.deleteConfig(name);
 
-  Future<void> renameConfig(String oldName, String newName) =>
-      _channel.renameConfig(oldName, newName);
+  Future<void> renameConfig(String oldName, String newName) async {
+    try {
+      await _channel.renameConfig(oldName, newName);
+    } on PlatformException catch (e) {
+      throw VpnRepositoryException(e.message ?? 'Failed to rename');
+    }
+  }
 
   Future<void> setIncludedApps(String name, List<String> packages) =>
       _channel.setIncludedApps(name, packages);
@@ -133,6 +144,23 @@ class VpnRepository {
     final raw = await _channel.getVpnLogs();
     return raw.map(VpnLogEntry.fromMap).toList();
   }
+
+  /// What happens after [getIdleMinutes] without this app or any tunneled app
+  /// on screen, or steady traffic. [IdleAction.off] without usage access.
+  Future<IdleAction> getIdleAction() async => IdleAction.values.byName(await _channel.getIdleAction());
+
+  Future<void> setIdleAction(IdleAction action) => _channel.setIdleAction(action.name);
+
+  Future<int> getIdleMinutes() => _channel.getIdleMinutes();
+
+  /// From 1 to 1440.
+  Future<void> setIdleMinutes(int minutes) => _channel.setIdleMinutes(minutes);
+
+  /// Needed to see which app is on screen.
+  Future<bool> hasUsageAccess() => _channel.hasUsageAccess();
+
+  /// Opens the system screen where the user can grant usage access.
+  Future<void> requestUsageAccess() => _channel.requestUsageAccess();
 
   Future<bool> hasBatteryExemption() => _channel.hasBatteryExemption();
 

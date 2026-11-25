@@ -14,27 +14,48 @@ import (
 
 func TestIPsAreReused(t *testing.T) {
 	s := &server{nextIP: firstClientIP, subnet: [3]byte{10, 10, 0}}
-	for range 1000 {
-		ip, ok := s.allocateIP()
+	for i := range 1000 {
+		ip, ok := s.allocateIP(fmt.Sprint(i))
 		if !ok {
 			t.Fatal("ran out of IPs despite releasing them")
 		}
 		s.releaseIP(ip)
 	}
 	seen := map[[4]byte]bool{}
-	for range 252 {
-		ip, ok := s.allocateIP()
+	for i := range 252 {
+		ip, ok := s.allocateIP(fmt.Sprint("x", i))
 		if !ok || seen[ip] || ip[3] < 2 || ip[3] > 253 {
 			t.Fatalf("bad allocation %v ok=%v", ip, ok)
 		}
 		seen[ip] = true
 	}
-	if _, ok := s.allocateIP(); ok {
+	if _, ok := s.allocateIP("new"); ok {
 		t.Fatal("allocated an IP from a full pool")
 	}
 	s.releaseIP([4]byte{10, 10, 0, 77})
-	if ip, ok := s.allocateIP(); !ok || ip[3] != 77 {
+	if ip, ok := s.allocateIP("new"); !ok || ip[3] != 77 {
 		t.Fatalf("got %v, want the one free IP", ip)
+	}
+}
+
+func TestUserKeepsTheirIP(t *testing.T) {
+	s := &server{nextIP: firstClientIP}
+	a, _ := s.allocateIP("a")
+	second, _ := s.allocateIP("a")
+	if a == second {
+		t.Fatal("two devices share an address")
+	}
+	s.releaseIP(second)
+	for range 3 {
+		b, _ := s.allocateIP("b")
+		s.releaseIP(b)
+		if again, _ := s.allocateIP("a"); again != second {
+			t.Fatalf("got %v back, want %v", again, second)
+		}
+		s.releaseIP(second)
+	}
+	if taken, _ := s.allocateIP("a"); taken == a {
+		t.Fatal("reused an address in use")
 	}
 }
 

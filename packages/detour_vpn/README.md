@@ -3,7 +3,9 @@
 A Flutter plugin for a self-hosted, split-tunnel VPN that talks to [`detour-server`](../../server). Add it to any Flutter app's `pubspec.yaml` to get:
 
 - Per-app tunneling (only the apps you pick route through the VPN — everything else bypasses it at the OS level)
-- A single background `VpnService`, with a wake lock and a 15-second heartbeat only while connected
+- A single background `VpnService` that sleeps until there is traffic, and checks the connection every few minutes
+- Optional auto-stop or standby after a chosen time without one of its apps on screen (`setIdleAction`, needs the usage access permission)
+- Configs encrypted with the Android Keystore, and one-time invite links
 - Admin calls to list, add, limit, reset and remove a server's users (`listServerUsers` and friends), for configs whose user is an admin
 - A home-screen widget that toggles the last-used config (remove it with `tools:node="remove"` on `com.detour.vpn.VpnWidgetProvider` in your manifest)
 - A connection log and live status stream
@@ -42,7 +44,7 @@ await vpn.connect('home');
 vpn.watchStatus().listen((status) => print(status.state));
 ```
 
-Invite links are `detour://user:password@host:port/fingerprint?name=suggested`, with the values percent-encoded. `importConfig` also accepts `key: value` lines for `host`, `port`, `username`, `password`, `fingerprint` and `apps`. `previewConfig` checks either without saving.
+Importing an unused invite claims it on its server, so it needs a connection and works once. Invite links are `detour://user:password@host:port/fingerprint?name=suggested`, with the values percent-encoded. `importConfig` also accepts `key: value` lines for `host`, `port`, `username`, `password`, `fingerprint` and `apps`. `previewConfig` checks either without saving.
 
 See [`tunnel_config.dart`](lib/src/models/tunnel_config.dart) for the config shape and [`vpn_repository.dart`](lib/src/vpn_repository.dart) for the full API (list/rename/delete configs, per-app allow-list, logs, battery-optimization exemption).
 
