@@ -3,7 +3,8 @@
 A self-hosted, split-tunnel VPN: run `detour-server` on your own box, connect your phone to it, and pick exactly which apps route through it. Built because WireGuard gets blocked by some networks' DPI and OpenVPN has no clean embeddable Android library — Detour disguises its traffic as plain TLS on port 443.
 
 - **Per-app tunneling** — only the apps you choose use the VPN; everything else bypasses it at the OS level.
-- **Low battery use** — one background service, no polling, a wake lock held only while actually connected.
+- **Only runs while connected** — one background service, with a wake lock and a small heartbeat every 15 seconds to keep the connection alive.
+- **Home-screen widget** — connect and disconnect with one tap.
 - **Per-user limits** — admins set each user's speed and total data in the app; the server enforces them.
 - **No central service, no accounts with a third party** — you run the server, you own the user list.
 
@@ -15,18 +16,21 @@ packages/detour_vpn/ Flutter plugin: the VPN engine (Dart API + Android VpnServi
 app/                 Thin demo Flutter app built on detour_vpn
 ```
 
-Everything is designed to be used independently: `detour-server` is a single static-ish Go binary with no Flutter dependency, and `detour_vpn` is a normal Flutter plugin you can add to your own app's `pubspec.yaml` without touching `app/` at all.
+Everything is designed to be used independently: `detour-server` is a single Go binary with no Flutter dependency, and `detour_vpn` is a normal Flutter plugin you can add to your own app's `pubspec.yaml` without touching `app/` at all.
 
 ## Quick start
 
-1. **Server**: see [`server/README.md`](server/README.md) — generate a cert, add a user, run the binary.
-2. **App**: see [`packages/detour_vpn/README.md`](packages/detour_vpn/README.md) for the API, or just build `app/` directly:
+1. **Server**: follow [`server/README.md`](server/README.md). It ends with an invite link for your admin account.
+2. **App** (Android 8 or newer): install [Flutter](https://docs.flutter.dev/get-started/install), connect your phone with USB debugging on, and run:
    ```bash
    cd app
    flutter pub get
    flutter run
    ```
-3. In the app, tap **+** and paste the config text `detour-server adduser` gave you (plus the cert fingerprint), then connect.
+3. In the app, tap **+**, paste the invite link, and tap **Add**. Pick your apps under **⋮ → Select apps**, then tap the server to connect.
+4. Invite other people under **⋮ → Manage users**.
+
+There are no prebuilt downloads yet. Building your own app? Use the [`detour_vpn`](packages/detour_vpn/README.md) package.
 
 ## How it works
 
