@@ -12,7 +12,7 @@
   <img src="docs/screenshots/hero.png" alt="Choosing apps, connected, and on standby" width="640">
 </p>
 
-Self-hosted, Android, and looks like ordinary HTTPS on port 443.
+WireGuard is excellent, but it runs over UDP, which some networks block. OpenVPN can use TCP, but its handshake is easy to recognize, and it's hard to embed in an Android app. Detour sends everything over plain TLS on port 443, so it looks like ordinary HTTPS, with per-app control and battery saving built in.
 
 ## Customizable
 
