@@ -11,6 +11,8 @@ server/detour-server-*
 app/android/local.properties
 app/android/.gradle/
 app/android/**/gradlew.log
+app/android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+packages/detour_vpn/pubspec.lock
 *.iml
 .idea/
 

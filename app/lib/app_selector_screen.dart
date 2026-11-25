@@ -1,6 +1,5 @@
 import 'package:detour_vpn/detour_vpn.dart';
 import 'package:flutter/material.dart';
-import 'package:installed_apps/app_info.dart';
 import 'package:installed_apps/installed_apps.dart';
 
 /// Pick which installed apps route through a given saved [config]'s tunnel.
