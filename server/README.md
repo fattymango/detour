@@ -23,14 +23,20 @@ You need a Linux server with a public IPv4 address, root access, `openssl` and `
 
 ### 1. Get the program
 
-There are no prebuilt downloads yet, so build it on any computer with [Go](https://go.dev/dl/), in this folder. Use `GOARCH=arm64` for ARM servers:
+Run everything in this guide **on the server**, in one terminal session. This downloads the right program for its CPU and checks it:
 
 ```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o detour-server .
-scp detour-server you@YOUR.SERVER.IP:/tmp/
+case "$(uname -m)" in
+  x86_64) ARCH=amd64 ;; aarch64) ARCH=arm64 ;; armv7l) ARCH=armv7 ;; armv6l) ARCH=armv6 ;;
+  *) ARCH=unsupported; echo "No download for this CPU, build it instead" ;;
+esac
+cd "$(mktemp -d)"
+curl -fsSLO "https://github.com/fattymango/detour/releases/latest/download/detour-server-linux-$ARCH"
+curl -fsSLO https://github.com/fattymango/detour/releases/latest/download/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS && mv "detour-server-linux-$ARCH" /tmp/detour-server
 ```
 
-Run everything below **on the server**, in one terminal session.
+Or build it with [Go](https://go.dev/dl/): `CGO_ENABLED=0 go build -o /tmp/detour-server .` in this folder.
 
 ### 2. Install it and create the certificate
 

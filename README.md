@@ -50,10 +50,7 @@ WireGuard is excellent, but it runs over UDP, which some networks block. OpenVPN
 ## Quick start
 
 1. [Set up a server](server/README.md), or [get one free](docs/free-server.md). It ends with your invite link.
-2. Build the app with [Flutter](https://docs.flutter.dev/get-started/install) and your phone connected:
-   ```bash
-   cd app && flutter run --release
-   ```
+2. Install the app from [Releases](https://github.com/fattymango/detour/releases/latest): `detour-android-arm64-v8a.apk` for most phones.
 3. Paste the link, choose your apps, connect.
 
 Android 8+, IPv4 only. Update the server and phones together.

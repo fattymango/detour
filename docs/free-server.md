@@ -15,7 +15,7 @@ Free credits can run Detour for months. Offers change, so check each page before
 
 1. Create a small Ubuntu or Debian server with a public IPv4 address.
 2. Firewall: allow TCP **443** from anywhere, and SSH only from your own IP.
-3. Follow the [server guide](../server/README.md). Use `GOARCH=arm64` for ARM servers.
+3. Follow the [server guide](../server/README.md).
 4. [Install the app](../README.md#quick-start) and paste your invite link.
 
 ## Option 2: with an AI agent
@@ -46,11 +46,11 @@ Security:
   server, private networks or the metadata service.
 
 Then:
-- Build detour-server for the server's CPU, install it as a service, and check
-  that it survives a reboot.
+- Install detour-server for the server's CPU from the project's releases, check
+  its checksum, run it as a service, and check that it survives a reboot.
 - Create my admin user. Save the invite link in a private local file.
   Don't print it in the chat.
-- Help me build and install the Android app, and tell me how to stop or delete
+- Tell me how to install the Android app from the releases, and how to stop or delete
   everything.
 
 Ask before opening ports, creating anything that costs credit, or deleting anything.
